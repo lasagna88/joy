@@ -1,10 +1,16 @@
 FROM node:20-alpine AS base
 
-# Install dependencies
+# Install all dependencies (for building)
 FROM base AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
+
+# Install production-only dependencies (for runtime)
+FROM base AS prod-deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 # Build the app
 FROM base AS builder
@@ -18,7 +24,7 @@ FROM base AS worker
 WORKDIR /app
 ENV NODE_ENV=production
 
-COPY --from=deps /app/node_modules ./node_modules
+COPY --from=prod-deps /app/node_modules ./node_modules
 COPY . .
 
 CMD ["npx", "tsx", "src/worker/index.ts"]
@@ -28,14 +34,16 @@ FROM base AS app
 WORKDIR /app
 ENV NODE_ENV=production
 
-# Copy drizzle config + schema for migration on startup
-COPY --from=deps /app/node_modules ./node_modules
+# Prod node_modules for drizzle-kit migration at startup
+COPY --from=prod-deps /app/node_modules ./node_modules
+
+# Copy drizzle config + schema for migration
 COPY --from=builder /app/drizzle.config.ts ./drizzle.config.ts
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
 COPY --from=builder /app/src/lib/db ./src/lib/db
 COPY --from=builder /app/package.json ./package.json
 
-# Copy Next.js standalone app
+# Copy Next.js standalone app (overlays its own trimmed node_modules)
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
