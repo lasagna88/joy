@@ -89,6 +89,9 @@ export const goals = pgTable("goals", {
   id: uuid("id").primaryKey().defaultRandom(),
   title: text("title").notNull(),
   description: text("description"),
+  type: text("type").notNull().default("personal"), // "work" | "personal"
+  sessionDuration: integer("session_duration_minutes"), // e.g. 60
+  frequency: text("frequency"), // e.g. "2x_per_week"
   weeklyHoursTarget: real("weekly_hours_target"),
   monthlyHoursTarget: real("monthly_hours_target"),
   color: text("color"),
@@ -172,6 +175,15 @@ export const notifications = pgTable("notifications", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Grocery Items - simple shopping list
+export const groceryItems = pgTable("grocery_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  checked: boolean("checked").notNull().default(false),
+  checkedAt: timestamp("checked_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // Type exports for use in app code
 export type Task = typeof tasks.$inferSelect;
 export type NewTask = typeof tasks.$inferInsert;
@@ -186,3 +198,5 @@ export type UserPreference = typeof userPreferences.$inferSelect;
 export type PushSubscription = typeof pushSubscriptions.$inferSelect;
 export type SchedulingRule = typeof schedulingRules.$inferSelect;
 export type NewSchedulingRule = typeof schedulingRules.$inferInsert;
+export type GroceryItem = typeof groceryItems.$inferSelect;
+export type NewGroceryItem = typeof groceryItems.$inferInsert;

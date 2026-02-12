@@ -7,6 +7,7 @@ import { runWeeklyPlan } from "./jobs/weekly-plan";
 import { runGoogleCalendarSync } from "./jobs/google-calendar-sync";
 import { runBiginSync } from "./jobs/bigin-sync";
 import { runSalesRabbitSync } from "./jobs/salesrabbit-sync";
+import { runGroceryCleanup } from "./jobs/grocery-cleanup";
 import { sendPushNotification } from "../lib/notifications";
 
 const connection = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {
@@ -72,6 +73,8 @@ const syncWorker = new Worker(
         return await runBiginSync();
       case "salesrabbit-sync":
         return await runSalesRabbitSync();
+      case "grocery-cleanup":
+        return await runGroceryCleanup();
       default:
         console.log(`[sync] Unknown job: ${job.name}`);
     }
@@ -163,6 +166,18 @@ async function setupSchedules() {
     }
   );
   console.log("[scheduler] SalesRabbit sync scheduled: every 15 minutes (offset)");
+
+  // Grocery cleanup: every hour
+  await syncQueue.add(
+    "grocery-cleanup",
+    {},
+    {
+      repeat: {
+        pattern: "45 * * * *", // Every hour at :45
+      },
+    }
+  );
+  console.log("[scheduler] Grocery cleanup scheduled: hourly");
 }
 
 // Graceful shutdown

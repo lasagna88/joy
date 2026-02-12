@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
 
 interface Goal {
   id: string;
   title: string;
   description: string | null;
+  type: string;
+  sessionDuration: number | null;
+  frequency: string | null;
   weeklyHoursTarget: number | null;
   monthlyHoursTarget: number | null;
   color: string | null;
@@ -29,12 +31,42 @@ const colorOptions = [
   { value: "blue", label: "Blue", class: "bg-blue-400" },
 ];
 
+const frequencyOptions = [
+  { value: "", label: "No schedule" },
+  { value: "daily", label: "Daily" },
+  { value: "2x_per_week", label: "2x per week" },
+  { value: "3x_per_week", label: "3x per week" },
+  { value: "4x_per_week", label: "4x per week" },
+  { value: "5x_per_week", label: "5x per week" },
+  { value: "weekly", label: "Weekly" },
+  { value: "biweekly", label: "Every 2 weeks" },
+  { value: "monthly", label: "Monthly" },
+  { value: "2x_per_month", label: "2x per month" },
+  { value: "3x_per_month", label: "3x per month" },
+];
+
+const frequencyLabels: Record<string, string> = {
+  daily: "Daily",
+  "2x_per_week": "2x/week",
+  "3x_per_week": "3x/week",
+  "4x_per_week": "4x/week",
+  "5x_per_week": "5x/week",
+  weekly: "Weekly",
+  biweekly: "Biweekly",
+  monthly: "Monthly",
+  "2x_per_month": "2x/month",
+  "3x_per_month": "3x/month",
+};
+
 export function GoalsView() {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [formTitle, setFormTitle] = useState("");
   const [formDescription, setFormDescription] = useState("");
+  const [formType, setFormType] = useState<"personal" | "work">("personal");
+  const [formSessionDuration, setFormSessionDuration] = useState("60");
+  const [formFrequency, setFormFrequency] = useState("");
   const [formHours, setFormHours] = useState("5");
   const [formColor, setFormColor] = useState("cyan");
   const [saving, setSaving] = useState(false);
@@ -75,6 +107,28 @@ export function GoalsView() {
     fetchProgress();
   }, []);
 
+  // Auto-calculate weekly hours from frequency + duration
+  useEffect(() => {
+    if (formFrequency && formSessionDuration) {
+      const duration = parseInt(formSessionDuration) || 60;
+      const sessionsPerWeek: Record<string, number> = {
+        daily: 7,
+        "2x_per_week": 2,
+        "3x_per_week": 3,
+        "4x_per_week": 4,
+        "5x_per_week": 5,
+        weekly: 1,
+        biweekly: 0.5,
+        monthly: 0.25,
+        "2x_per_month": 0.5,
+        "3x_per_month": 0.75,
+      };
+      const sessions = sessionsPerWeek[formFrequency] || 0;
+      const hours = (sessions * duration) / 60;
+      setFormHours(hours.toString());
+    }
+  }, [formFrequency, formSessionDuration]);
+
   async function createGoal() {
     if (!formTitle.trim()) return;
     setSaving(true);
@@ -85,6 +139,9 @@ export function GoalsView() {
         body: JSON.stringify({
           title: formTitle.trim(),
           description: formDescription.trim() || undefined,
+          type: formType,
+          sessionDuration: formFrequency ? parseInt(formSessionDuration) || 60 : undefined,
+          frequency: formFrequency || undefined,
           weeklyHoursTarget: parseFloat(formHours) || 5,
           color: formColor,
         }),
@@ -92,6 +149,9 @@ export function GoalsView() {
       if (res.ok) {
         setFormTitle("");
         setFormDescription("");
+        setFormType("personal");
+        setFormSessionDuration("60");
+        setFormFrequency("");
         setFormHours("5");
         setShowForm(false);
         await fetchGoals();
@@ -115,7 +175,7 @@ export function GoalsView() {
   if (loading) {
     return (
       <div className="space-y-4">
-        <h1 className="text-2xl font-bold">Goals</h1>
+        <h2 className="text-lg font-semibold text-zinc-200">Goals</h2>
         <div className="space-y-3">
           {[1, 2].map((i) => (
             <div key={i} className="h-24 rounded-xl bg-zinc-900 animate-pulse" />
@@ -128,21 +188,13 @@ export function GoalsView() {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Goals</h1>
-        <div className="flex gap-2">
-          <Link
-            href="/analytics"
-            className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 transition-colors hover:bg-zinc-700"
-          >
-            Analytics
-          </Link>
-          <button
-            onClick={() => setShowForm(!showForm)}
-            className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 transition-colors hover:bg-zinc-700"
-          >
-            {showForm ? "Cancel" : "+ Add"}
-          </button>
-        </div>
+        <h2 className="text-lg font-semibold text-zinc-200">Goals</h2>
+        <button
+          onClick={() => setShowForm(!showForm)}
+          className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 transition-colors hover:bg-zinc-700"
+        >
+          {showForm ? "Cancel" : "+ Add"}
+        </button>
       </div>
 
       {/* New Goal Form */}
@@ -152,7 +204,7 @@ export function GoalsView() {
             type="text"
             value={formTitle}
             onChange={(e) => setFormTitle(e.target.value)}
-            placeholder="Goal title (e.g. Learn Spanish)"
+            placeholder="Goal title (e.g. Gym, Learn Spanish)"
             className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
             autoFocus
           />
@@ -163,6 +215,57 @@ export function GoalsView() {
             rows={2}
             className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:border-blue-500 focus:outline-none resize-none"
           />
+
+          {/* Type toggle */}
+          <div>
+            <label className="text-xs text-zinc-500 block mb-1">Type</label>
+            <div className="flex rounded-lg bg-zinc-800 p-0.5">
+              {(["personal", "work"] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setFormType(t)}
+                  className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                    formType === t
+                      ? "bg-zinc-600 text-white"
+                      : "text-zinc-400 hover:text-zinc-300"
+                  }`}
+                >
+                  {t === "personal" ? "Personal" : "Work"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Frequency + Session Duration */}
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="text-xs text-zinc-500 block mb-1">Frequency</label>
+              <select
+                value={formFrequency}
+                onChange={(e) => setFormFrequency(e.target.value)}
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white [color-scheme:dark]"
+              >
+                {frequencyOptions.map((f) => (
+                  <option key={f.value} value={f.value}>{f.label}</option>
+                ))}
+              </select>
+            </div>
+            {formFrequency && (
+              <div className="flex-1">
+                <label className="text-xs text-zinc-500 block mb-1">Session (min)</label>
+                <input
+                  type="number"
+                  value={formSessionDuration}
+                  onChange={(e) => setFormSessionDuration(e.target.value)}
+                  min="15"
+                  step="15"
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white [color-scheme:dark]"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Weekly hours + Color */}
           <div className="flex items-center gap-3">
             <div className="flex-1">
               <label className="text-xs text-zinc-500 block mb-1">
@@ -245,12 +348,27 @@ export function GoalsView() {
                   <div className="flex items-center gap-2.5">
                     <div className={`h-3 w-3 rounded-full ${colorDot}`} />
                     <div>
-                      <h3 className="font-semibold text-white">
-                        {goal.title}
-                      </h3>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-semibold text-white">
+                          {goal.title}
+                        </h3>
+                        <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                          goal.type === "work"
+                            ? "bg-blue-500/20 text-blue-400"
+                            : "bg-pink-500/20 text-pink-400"
+                        }`}>
+                          {goal.type}
+                        </span>
+                      </div>
                       {goal.description && (
                         <p className="text-xs text-zinc-500 mt-0.5">
                           {goal.description}
+                        </p>
+                      )}
+                      {goal.frequency && (
+                        <p className="text-[10px] text-zinc-500 mt-0.5">
+                          {frequencyLabels[goal.frequency] || goal.frequency}
+                          {goal.sessionDuration && ` \u00b7 ${goal.sessionDuration}min`}
                         </p>
                       )}
                     </div>

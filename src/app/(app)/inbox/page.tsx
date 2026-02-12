@@ -1,5 +1,5 @@
-import { InboxView } from "@/components/inbox-view";
+import { redirect } from "next/navigation";
 
 export default function InboxPage() {
-  return <InboxView />;
+  redirect("/lists");
 }

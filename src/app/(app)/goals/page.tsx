@@ -1,11 +1,5 @@
-import { GoalsView } from "@/components/goals-view";
-import { SchedulingRules } from "@/components/scheduling-rules";
+import { redirect } from "next/navigation";
 
 export default function GoalsPage() {
-  return (
-    <div className="space-y-8">
-      <GoalsView />
-      <SchedulingRules />
-    </div>
-  );
+  redirect("/me");
 }

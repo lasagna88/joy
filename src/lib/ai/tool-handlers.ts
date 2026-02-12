@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { tasks, calendarEvents, goals, schedulingRules } from "@/lib/db/schema";
+import { tasks, calendarEvents, goals, schedulingRules, groceryItems } from "@/lib/db/schema";
 import { eq, and, ne, gte, lt, desc } from "drizzle-orm";
 import { getPreferences } from "@/lib/preferences";
 import {
@@ -39,6 +39,10 @@ export async function handleToolCall(
       return handleListSchedulingRules();
     case "create_goal":
       return handleCreateGoal(input);
+    case "add_grocery_item":
+      return handleAddGroceryItem(input);
+    case "list_grocery_items":
+      return handleListGroceryItems();
     default:
       return JSON.stringify({ error: `Unknown tool: ${name}` });
   }
@@ -370,30 +374,113 @@ async function handleListGoals(): Promise<string> {
       id: g.id,
       title: g.title,
       description: g.description,
+      type: g.type,
+      sessionDuration: g.sessionDuration,
+      frequency: g.frequency,
       weeklyHoursTarget: g.weeklyHoursTarget,
       color: g.color,
     })),
   });
 }
 
+const frequencyLabelsForRule: Record<string, string> = {
+  daily: "daily",
+  "2x_per_week": "2 sessions per week",
+  "3x_per_week": "3 sessions per week",
+  "4x_per_week": "4 sessions per week",
+  "5x_per_week": "5 sessions per week",
+  weekly: "1 session per week",
+  biweekly: "every 2 weeks",
+  monthly: "1 session per month",
+  "2x_per_month": "2 sessions per month",
+  "3x_per_month": "3 sessions per month",
+};
+
 async function handleCreateGoal(input: ToolInput): Promise<string> {
+  const goalType = (input.type as string) || "personal";
+  const frequency = input.frequency as string | undefined;
+  const sessionDuration = input.session_duration as number | undefined;
+
   const [goal] = await db
     .insert(goals)
     .values({
       title: input.title as string,
       description: (input.description as string) || undefined,
+      type: goalType,
+      sessionDuration: sessionDuration || undefined,
+      frequency: frequency || undefined,
       weeklyHoursTarget: input.weekly_hours_target as number,
       color: (input.color as string) || "cyan",
     })
     .returning();
+
+  // Auto-create a linked scheduling rule when frequency + duration are provided
+  let ruleText: string | undefined;
+  if (frequency && sessionDuration) {
+    const freqLabel = frequencyLabelsForRule[frequency] || frequency;
+    const durHours = sessionDuration >= 60
+      ? `${sessionDuration / 60} hour${sessionDuration > 60 ? "s" : ""}`
+      : `${sessionDuration} minutes`;
+    const timeSlot = goalType === "personal"
+      ? "personal time only (outside work hours)"
+      : "during work hours";
+
+    ruleText = `${goal.title}: ${freqLabel}, ${durHours} each, ${timeSlot}`;
+    await db.insert(schedulingRules).values({
+      text: ruleText,
+      goalId: goal.id,
+    });
+  }
 
   return JSON.stringify({
     success: true,
     goal: {
       id: goal.id,
       title: goal.title,
+      type: goal.type,
+      frequency: goal.frequency,
+      sessionDuration: goal.sessionDuration,
       weeklyHoursTarget: goal.weeklyHoursTarget,
     },
+    schedulingRule: ruleText || null,
+  });
+}
+
+async function handleAddGroceryItem(input: ToolInput): Promise<string> {
+  const [item] = await db
+    .insert(groceryItems)
+    .values({ name: input.name as string })
+    .returning();
+
+  return JSON.stringify({
+    success: true,
+    item: { id: item.id, name: item.name },
+  });
+}
+
+async function handleListGroceryItems(): Promise<string> {
+  const unchecked = await db
+    .select()
+    .from(groceryItems)
+    .where(eq(groceryItems.checked, false))
+    .orderBy(desc(groceryItems.createdAt));
+
+  const checked = await db
+    .select()
+    .from(groceryItems)
+    .where(eq(groceryItems.checked, true))
+    .orderBy(desc(groceryItems.checkedAt));
+
+  const items = [...unchecked, ...checked];
+
+  return JSON.stringify({
+    count: items.length,
+    unchecked_count: unchecked.length,
+    items: items.map((i) => ({
+      id: i.id,
+      name: i.name,
+      checked: i.checked,
+    })),
   });
 }
 

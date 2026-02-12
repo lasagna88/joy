@@ -307,6 +307,31 @@ export const AI_TOOLS: ToolDef[] = [
           type: "string",
           description: "Goal details",
         },
+        type: {
+          type: "string",
+          enum: ["work", "personal"],
+          description: "Whether this is a work goal (scheduled during work hours) or personal goal (scheduled outside work hours). Default: personal.",
+        },
+        session_duration: {
+          type: "number",
+          description: "Duration of each session in minutes (e.g. 60)",
+        },
+        frequency: {
+          type: "string",
+          enum: [
+            "daily",
+            "2x_per_week",
+            "3x_per_week",
+            "4x_per_week",
+            "5x_per_week",
+            "weekly",
+            "biweekly",
+            "monthly",
+            "2x_per_month",
+            "3x_per_month",
+          ],
+          description: "How often to schedule sessions for this goal",
+        },
         weekly_hours_target: {
           type: "number",
           description: "Target hours per week for this goal",
@@ -317,6 +342,31 @@ export const AI_TOOLS: ToolDef[] = [
         },
       },
       required: ["title", "weekly_hours_target"],
+    },
+  },
+  {
+    name: "add_grocery_item",
+    description:
+      "Add an item to Scott's grocery list. Use when Scott mentions something to buy or add to groceries.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "The grocery item name (e.g. 'Milk', 'Eggs', 'Bread')",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "list_grocery_items",
+    description:
+      "List all items on Scott's grocery list. Use when asked what's on the grocery list.",
+    input_schema: {
+      type: "object",
+      properties: {},
+      required: [],
     },
   },
 ];
