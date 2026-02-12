@@ -167,7 +167,7 @@ export function SettingsView() {
     } else if (bigin === "error") {
       const reason = searchParams.get("reason") || "unknown";
       setBiginMessage(`Connection failed: ${reason}`);
-      setTimeout(() => setBiginMessage(null), 6000);
+      setTimeout(() => setBiginMessage(null), 10000);
     }
   }, [searchParams, loadGcalStatus, loadBiginStatus]);
 

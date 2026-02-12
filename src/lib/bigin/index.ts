@@ -2,8 +2,18 @@ import { db } from "@/lib/db";
 import { integrationState, tasks } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 
-const ZOHO_ACCOUNTS_URL = "https://accounts.zoho.com";
-const BIGIN_API_URL = "https://www.zohoapis.com/bigin/v2";
+// Zoho uses different domains per data center:
+//   US: accounts.zoho.com / www.zohoapis.com
+//   CA: accounts.zohocloud.ca / www.zohoapis.ca
+//   EU: accounts.zoho.eu / www.zohoapis.eu
+//   IN: accounts.zoho.in / www.zohoapis.in
+//   AU: accounts.zoho.com.au / www.zohoapis.com.au
+const ZOHO_ACCOUNTS_URL =
+  process.env.ZOHO_ACCOUNTS_URL || "https://accounts.zoho.com";
+const BIGIN_API_URL = `${process.env.ZOHO_API_URL || "https://www.zohoapis.com"}/bigin/v2`;
+
+// Stored after initial OAuth to use for token refresh
+let zohoAccountsUrl = ZOHO_ACCOUNTS_URL;
 
 // Map Bigin pipeline stages to Joy task categories
 const STAGE_TO_CATEGORY: Record<string, string> = {
@@ -52,9 +62,19 @@ export function getAuthUrl(): string {
 }
 
 /**
- * Exchange authorization code for tokens
+ * Exchange authorization code for tokens.
+ * @param accountsServer - The Zoho accounts server URL from the callback
+ *   (e.g. https://accounts.zoho.com, https://accounts.zoho.in, etc.)
+ *   Zoho sends this as the `accounts-server` query param in the callback.
  */
-export async function exchangeCodeForTokens(code: string) {
+export async function exchangeCodeForTokens(
+  code: string,
+  accountsServer?: string
+) {
+  // Use the accounts server from the callback (respects user's data center)
+  const accountsUrl = accountsServer || DEFAULT_ZOHO_ACCOUNTS_URL;
+  zohoAccountsUrl = accountsUrl;
+
   const params = new URLSearchParams({
     grant_type: "authorization_code",
     client_id: process.env.ZOHO_CLIENT_ID || "",
@@ -63,43 +83,60 @@ export async function exchangeCodeForTokens(code: string) {
     code,
   });
 
-  const res = await fetch(`${ZOHO_ACCOUNTS_URL}/oauth/v2/token`, {
+  console.log(
+    `[bigin] Token exchange: ${accountsUrl}/oauth/v2/token, redirect_uri=${process.env.ZOHO_REDIRECT_URI}`
+  );
+
+  const res = await fetch(`${accountsUrl}/oauth/v2/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: params.toString(),
   });
 
+  const text = await res.text();
+
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Zoho token exchange failed: ${res.status} ${text}`);
+    throw new Error(`Zoho token exchange HTTP ${res.status}: ${text}`);
   }
 
-  const data = await res.json();
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Zoho returned invalid JSON: ${text.slice(0, 200)}`);
+  }
 
   if (data.error) {
     throw new Error(`Zoho OAuth error: ${data.error}`);
   }
 
-  const expiresAt = new Date(Date.now() + (data.expires_in || 3600) * 1000);
+  if (!data.access_token) {
+    throw new Error(`Zoho response missing access_token: ${text.slice(0, 200)}`);
+  }
+
+  const expiresAt = new Date(
+    Date.now() + ((data.expires_in as number) || 3600) * 1000
+  );
 
   await db
     .insert(integrationState)
     .values({
       provider: "bigin",
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token || null,
+      accessToken: data.access_token as string,
+      refreshToken: (data.refresh_token as string) || null,
       tokenExpiresAt: expiresAt,
       isActive: true,
-      config: { stageMapping: STAGE_TO_CATEGORY },
+      config: { stageMapping: STAGE_TO_CATEGORY, accountsUrl },
       lastSyncAt: null,
     })
     .onConflictDoUpdate({
       target: integrationState.provider,
       set: {
-        accessToken: data.access_token,
-        refreshToken: data.refresh_token || undefined,
+        accessToken: data.access_token as string,
+        refreshToken: (data.refresh_token as string) || undefined,
         tokenExpiresAt: expiresAt,
         isActive: true,
+        config: { stageMapping: STAGE_TO_CATEGORY, accountsUrl },
         updatedAt: new Date(),
       },
     });
@@ -111,8 +148,11 @@ export async function exchangeCodeForTokens(code: string) {
  * Refresh the Zoho access token
  */
 async function refreshAccessToken(
-  refreshToken: string
+  refreshToken: string,
+  accountsUrl?: string
 ): Promise<string | null> {
+  const baseUrl = accountsUrl || zohoAccountsUrl;
+
   const params = new URLSearchParams({
     grant_type: "refresh_token",
     client_id: process.env.ZOHO_CLIENT_ID || "",
@@ -121,7 +161,7 @@ async function refreshAccessToken(
   });
 
   try {
-    const res = await fetch(`${ZOHO_ACCOUNTS_URL}/oauth/v2/token`, {
+    const res = await fetch(`${baseUrl}/oauth/v2/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: params.toString(),
@@ -166,6 +206,11 @@ async function getAccessToken(): Promise<string | null> {
 
   if (!state?.accessToken) return null;
 
+  // Use the stored accounts URL for token refresh
+  const config = state.config as Record<string, unknown> | null;
+  const storedAccountsUrl = (config?.accountsUrl as string) || undefined;
+  if (storedAccountsUrl) zohoAccountsUrl = storedAccountsUrl;
+
   // Refresh if expired or expiring within 5 min
   const expiresAt = state.tokenExpiresAt?.getTime() || 0;
   if (Date.now() > expiresAt - 5 * 60 * 1000) {
@@ -177,7 +222,10 @@ async function getAccessToken(): Promise<string | null> {
       return null;
     }
 
-    const newToken = await refreshAccessToken(state.refreshToken);
+    const newToken = await refreshAccessToken(
+      state.refreshToken,
+      storedAccountsUrl
+    );
     if (!newToken) {
       await db
         .update(integrationState)
@@ -254,9 +302,12 @@ export async function disconnect() {
     .where(eq(integrationState.provider, "bigin"));
 
   if (state?.refreshToken) {
+    const config = state.config as Record<string, unknown> | null;
+    const accountsUrl =
+      (config?.accountsUrl as string) || DEFAULT_ZOHO_ACCOUNTS_URL;
     try {
       await fetch(
-        `${ZOHO_ACCOUNTS_URL}/oauth/v2/token/revoke?token=${state.refreshToken}`,
+        `${accountsUrl}/oauth/v2/token/revoke?token=${state.refreshToken}`,
         { method: "POST" }
       );
     } catch {
