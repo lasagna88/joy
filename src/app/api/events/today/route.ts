@@ -2,20 +2,24 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { calendarEvents } from "@/lib/db/schema";
 import { and, gte, lt } from "drizzle-orm";
+import { getPreferences } from "@/lib/preferences";
+import { startOfDayUTC, endOfDayUTC } from "@/lib/timezone";
 
 export async function GET() {
   try {
-    const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
+    const prefs = await getPreferences();
+    const tz = prefs.timezone || "America/Denver";
+
+    const start = startOfDayUTC(tz);
+    const end = endOfDayUTC(tz);
 
     const events = await db
       .select()
       .from(calendarEvents)
       .where(
         and(
-          gte(calendarEvents.startTime, startOfDay),
-          lt(calendarEvents.startTime, endOfDay)
+          gte(calendarEvents.startTime, start),
+          lt(calendarEvents.startTime, end)
         )
       )
       .orderBy(calendarEvents.startTime);

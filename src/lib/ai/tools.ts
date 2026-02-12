@@ -54,7 +54,7 @@ export const AI_TOOLS: ToolDef[] = [
         deadline: {
           type: "string",
           description:
-            "ISO 8601 deadline if mentioned (e.g. 2025-03-15T14:00:00)",
+            "ISO 8601 deadline with timezone offset (e.g. 2025-03-15T14:00:00-07:00)",
         },
         location: {
           type: "string",
@@ -166,11 +166,11 @@ export const AI_TOOLS: ToolDef[] = [
         },
         start_time: {
           type: "string",
-          description: "ISO 8601 start time (e.g. 2025-03-15T10:00:00)",
+          description: "ISO 8601 start time with timezone offset (e.g. 2025-03-15T10:00:00-07:00)",
         },
         end_time: {
           type: "string",
-          description: "ISO 8601 end time (e.g. 2025-03-15T17:00:00)",
+          description: "ISO 8601 end time with timezone offset (e.g. 2025-03-15T17:00:00-07:00)",
         },
         location: {
           type: "string",
@@ -276,6 +276,16 @@ export const AI_TOOLS: ToolDef[] = [
     name: "list_goals",
     description:
       "List active goals with their weekly hour targets.",
+    input_schema: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "list_scheduling_rules",
+    description:
+      "List all active scheduling rules. These are user-defined time constraints that MUST be respected when planning. Always call this before planning a day.",
     input_schema: {
       type: "object",
       properties: {},

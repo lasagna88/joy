@@ -29,7 +29,7 @@ export async function kimiPlan(
 ): Promise<PlanResult> {
   const kimi = getKimiClient();
   const tools = toOpenAITools();
-  const systemPrompt = getSystemPrompt();
+  const systemPrompt = await getSystemPrompt();
 
   const messages: OpenAI.ChatCompletionMessageParam[] = [
     { role: "system", content: systemPrompt },

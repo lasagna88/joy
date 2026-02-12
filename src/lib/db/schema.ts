@@ -97,6 +97,16 @@ export const goals = pgTable("goals", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Scheduling Rules - user-defined time constraints for AI planning
+export const schedulingRules = pgTable("scheduling_rules", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  text: text("text").notNull(),
+  goalId: uuid("goal_id").references(() => goals.id, { onDelete: "set null" }),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // Conversations - chat threads with the AI
 export const conversations = pgTable("conversations", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -174,3 +184,5 @@ export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
 export type UserPreference = typeof userPreferences.$inferSelect;
 export type PushSubscription = typeof pushSubscriptions.$inferSelect;
+export type SchedulingRule = typeof schedulingRules.$inferSelect;
+export type NewSchedulingRule = typeof schedulingRules.$inferInsert;

@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { tasks, calendarEvents, goals } from "@/lib/db/schema";
+import { tasks, calendarEvents, goals, schedulingRules } from "@/lib/db/schema";
 import { eq, and, ne, gte, lt, desc } from "drizzle-orm";
 import { getPreferences } from "@/lib/preferences";
 import {
@@ -35,6 +35,8 @@ export async function handleToolCall(
       return handleGetPreferences();
     case "list_goals":
       return handleListGoals();
+    case "list_scheduling_rules":
+      return handleListSchedulingRules();
     case "create_goal":
       return handleCreateGoal(input);
     default:
@@ -263,21 +265,26 @@ async function handleDeleteCalendarEvent(input: ToolInput): Promise<string> {
 }
 
 async function handleListEvents(input: ToolInput): Promise<string> {
+  const prefs = await getPreferences();
+  const tz = prefs.timezone || "America/Denver";
   let startDate: Date;
   let endDate: Date;
 
   if (input.date) {
-    const d = new Date(input.date as string);
-    startDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-    endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
+    // AI sends a date like "2025-03-15" — compute day boundaries in user's tz
+    const dateStr = (input.date as string).slice(0, 10); // ensure YYYY-MM-DD
+    const { startOfDayUTC, endOfDayUTC } = await import("@/lib/timezone");
+    const ref = new Date(`${dateStr}T12:00:00Z`); // noon UTC as reference
+    startDate = startOfDayUTC(tz, ref);
+    endDate = endOfDayUTC(tz, ref);
   } else if (input.start_date && input.end_date) {
     startDate = new Date(input.start_date as string);
     endDate = new Date(input.end_date as string);
   } else {
     // Default to today
-    const now = new Date();
-    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
+    const { startOfDayUTC, endOfDayUTC } = await import("@/lib/timezone");
+    startDate = startOfDayUTC(tz);
+    endDate = endOfDayUTC(tz);
   }
 
   const events = await db
@@ -307,9 +314,13 @@ async function handleListEvents(input: ToolInput): Promise<string> {
 }
 
 async function handleClearDaySchedule(input: ToolInput): Promise<string> {
-  const d = new Date(input.date as string);
-  const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
+  const prefs = await getPreferences();
+  const tz = prefs.timezone || "America/Denver";
+  const dateStr = (input.date as string).slice(0, 10);
+  const { startOfDayUTC, endOfDayUTC } = await import("@/lib/timezone");
+  const ref = new Date(`${dateStr}T12:00:00Z`);
+  const startOfDay = startOfDayUTC(tz, ref);
+  const endOfDay = endOfDayUTC(tz, ref);
 
   // Delete AI-planned events only (keep blockers and external events)
   const deleted = await db
@@ -383,5 +394,27 @@ async function handleCreateGoal(input: ToolInput): Promise<string> {
       title: goal.title,
       weeklyHoursTarget: goal.weeklyHoursTarget,
     },
+  });
+}
+
+async function handleListSchedulingRules(): Promise<string> {
+  const result = await db
+    .select({
+      id: schedulingRules.id,
+      text: schedulingRules.text,
+      goalTitle: goals.title,
+    })
+    .from(schedulingRules)
+    .leftJoin(goals, eq(schedulingRules.goalId, goals.id))
+    .where(eq(schedulingRules.isActive, true))
+    .orderBy(schedulingRules.createdAt);
+
+  return JSON.stringify({
+    count: result.length,
+    rules: result.map((r) => ({
+      id: r.id,
+      text: r.text,
+      goalTitle: r.goalTitle || undefined,
+    })),
   });
 }

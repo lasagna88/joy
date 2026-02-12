@@ -71,7 +71,7 @@ export async function geminiChat(
 ): Promise<ChatResult> {
   const ai = getGeminiClient();
   const tools = toGeminiTools();
-  const systemInstruction = getSystemPrompt();
+  const systemInstruction = await getSystemPrompt();
 
   let finalText = "";
   const toolActions: ChatResult["toolActions"] = [];
