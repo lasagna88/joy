@@ -4,6 +4,9 @@ import Redis from "ioredis";
 import { runMorningBriefing } from "./jobs/morning-briefing";
 import { runEveningReview } from "./jobs/evening-review";
 import { runWeeklyPlan } from "./jobs/weekly-plan";
+import { runGoogleCalendarSync } from "./jobs/google-calendar-sync";
+import { runBiginSync } from "./jobs/bigin-sync";
+import { runSalesRabbitSync } from "./jobs/salesrabbit-sync";
 import { sendPushNotification } from "@/lib/notifications";
 
 const connection = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {
@@ -56,11 +59,22 @@ const notificationWorker = new Worker(
   { connection }
 );
 
-// Sync worker (placeholder for Phase 2)
+// Sync worker
 const syncWorker = new Worker(
   "sync",
   async (job) => {
-    console.log(`[sync] Processing: ${job.name} — Phase 2`);
+    console.log(`[sync] Processing: ${job.name}`);
+
+    switch (job.name) {
+      case "google-calendar-sync":
+        return await runGoogleCalendarSync();
+      case "bigin-sync":
+        return await runBiginSync();
+      case "salesrabbit-sync":
+        return await runSalesRabbitSync();
+      default:
+        console.log(`[sync] Unknown job: ${job.name}`);
+    }
   },
   { connection }
 );
@@ -71,6 +85,11 @@ async function setupSchedules() {
   const existing = await planningQueue.getRepeatableJobs();
   for (const job of existing) {
     await planningQueue.removeRepeatableByKey(job.key);
+  }
+
+  const existingSync = await syncQueue.getRepeatableJobs();
+  for (const job of existingSync) {
+    await syncQueue.removeRepeatableByKey(job.key);
   }
 
   // Morning briefing: 6:00 AM daily
@@ -108,6 +127,42 @@ async function setupSchedules() {
     }
   );
   console.log("[scheduler] Weekly planning scheduled: Sunday 6:00 PM");
+
+  // Google Calendar sync: every 30 minutes
+  await syncQueue.add(
+    "google-calendar-sync",
+    {},
+    {
+      repeat: {
+        pattern: "*/30 * * * *", // Every 30 minutes
+      },
+    }
+  );
+  console.log("[scheduler] Google Calendar sync scheduled: every 30 minutes");
+
+  // Bigin sync: every 15 minutes
+  await syncQueue.add(
+    "bigin-sync",
+    {},
+    {
+      repeat: {
+        pattern: "*/15 * * * *", // Every 15 minutes
+      },
+    }
+  );
+  console.log("[scheduler] Bigin sync scheduled: every 15 minutes");
+
+  // SalesRabbit sync: every 15 minutes
+  await syncQueue.add(
+    "salesrabbit-sync",
+    {},
+    {
+      repeat: {
+        pattern: "7,22,37,52 * * * *", // Every 15 min, offset from Bigin
+      },
+    }
+  );
+  console.log("[scheduler] SalesRabbit sync scheduled: every 15 minutes (offset)");
 }
 
 // Graceful shutdown

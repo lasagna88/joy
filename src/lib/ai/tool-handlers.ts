@@ -2,6 +2,11 @@ import { db } from "@/lib/db";
 import { tasks, calendarEvents, goals } from "@/lib/db/schema";
 import { eq, and, ne, gte, lt, desc } from "drizzle-orm";
 import { getPreferences } from "@/lib/preferences";
+import {
+  pushEventToGoogle,
+  deleteGoogleEvent,
+  isConnected as isGoogleConnected,
+} from "@/lib/google-calendar";
 
 type ToolInput = Record<string, unknown>;
 
@@ -198,6 +203,23 @@ async function handleCreateCalendarEvent(input: ToolInput): Promise<string> {
     })
     .returning();
 
+  // Push to Google Calendar if connected
+  let googleEventId: string | null = null;
+  try {
+    if (await isGoogleConnected()) {
+      googleEventId = await pushEventToGoogle({
+        id: event.id,
+        title: event.title,
+        description: event.description,
+        startTime: event.startTime,
+        endTime: event.endTime,
+        location: event.location,
+      });
+    }
+  } catch (err) {
+    console.error("[tool] Failed to push event to Google Calendar:", err);
+  }
+
   return JSON.stringify({
     success: true,
     event: {
@@ -206,6 +228,7 @@ async function handleCreateCalendarEvent(input: ToolInput): Promise<string> {
       startTime: event.startTime,
       endTime: event.endTime,
       location: event.location,
+      googleEventId,
     },
   });
 }
@@ -220,6 +243,15 @@ async function handleDeleteCalendarEvent(input: ToolInput): Promise<string> {
 
   if (!deleted) {
     return JSON.stringify({ error: "Event not found" });
+  }
+
+  // Remove from Google Calendar if it was synced
+  if (deleted.googleEventId) {
+    try {
+      await deleteGoogleEvent(deleted.googleEventId);
+    } catch (err) {
+      console.error("[tool] Failed to delete Google Calendar event:", err);
+    }
   }
 
   return JSON.stringify({ success: true, deleted: deleted.id });
@@ -286,6 +318,17 @@ async function handleClearDaySchedule(input: ToolInput): Promise<string> {
       )
     )
     .returning();
+
+  // Remove from Google Calendar if synced
+  for (const event of deleted) {
+    if (event.googleEventId) {
+      try {
+        await deleteGoogleEvent(event.googleEventId);
+      } catch (err) {
+        console.error("[tool] Failed to delete Google event:", err);
+      }
+    }
+  }
 
   return JSON.stringify({
     success: true,
