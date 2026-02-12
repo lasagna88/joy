@@ -1,18 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAnthropicClient, getSystemPrompt } from "@/lib/ai";
-import { AI_TOOLS } from "@/lib/ai/tools";
-import { handleToolCall } from "@/lib/ai/tool-handlers";
-import type Anthropic from "@anthropic-ai/sdk";
-
-const MAX_TOOL_ROUNDS = 10; // Planning needs more rounds
+import { kimiPlan } from "@/lib/ai/kimi";
 
 export async function POST(request: NextRequest) {
   try {
     const { date } = await request.json();
 
     const targetDate = date || new Date().toISOString().split("T")[0];
-
-    const claude = getAnthropicClient();
 
     const planningPrompt = `Plan my day for ${targetDate}.
 
@@ -32,70 +25,13 @@ Create calendar events for each block using create_calendar_event. Mark schedule
 
 Then give me a brief summary of the plan.`;
 
-    let currentMessages: Anthropic.MessageParam[] = [
-      { role: "user", content: planningPrompt },
-    ];
-
-    let finalText = "";
-    const allToolActions: Array<{
-      tool: string;
-      input: Record<string, unknown>;
-    }> = [];
-
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const response = await claude.messages.create({
-        model: "claude-sonnet-4-5-20250929",
-        max_tokens: 2048,
-        system: getSystemPrompt(),
-        tools: AI_TOOLS,
-        messages: currentMessages,
-      });
-
-      const toolUseBlocks = response.content.filter(
-        (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
-      );
-      const textBlocks = response.content.filter(
-        (block): block is Anthropic.TextBlock => block.type === "text"
-      );
-
-      if (textBlocks.length > 0) {
-        finalText += textBlocks.map((b) => b.text).join("\n");
-      }
-
-      if (toolUseBlocks.length === 0 || response.stop_reason === "end_turn") {
-        break;
-      }
-
-      // Execute tool calls
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
-      for (const toolBlock of toolUseBlocks) {
-        const result = await handleToolCall(
-          toolBlock.name,
-          toolBlock.input as Record<string, unknown>
-        );
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: toolBlock.id,
-          content: result,
-        });
-        allToolActions.push({
-          tool: toolBlock.name,
-          input: toolBlock.input as Record<string, unknown>,
-        });
-      }
-
-      currentMessages = [
-        ...currentMessages,
-        { role: "assistant" as const, content: response.content },
-        { role: "user" as const, content: toolResults },
-      ];
-    }
+    const { text, toolActions } = await kimiPlan(planningPrompt);
 
     return NextResponse.json({
       success: true,
       date: targetDate,
-      summary: finalText,
-      actions: allToolActions,
+      summary: text,
+      actions: toolActions,
     });
   } catch (error) {
     console.error("Planning error:", error);

@@ -1,10 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { AI_TOOLS } from "../../lib/ai/tools";
-import { handleToolCall } from "../../lib/ai/tool-handlers";
-import { getSystemPrompt } from "../../lib/ai";
+import { kimiPlan } from "../../lib/ai/kimi";
 import { sendPushNotification } from "../../lib/notifications";
-
-const MAX_ROUNDS = 12;
 
 export async function runWeeklyPlan(): Promise<string> {
   const today = new Date();
@@ -17,8 +12,6 @@ export async function runWeeklyPlan(): Promise<string> {
   const weekEnd = sunday.toISOString().split("T")[0];
 
   console.log(`[weekly-plan] Planning week ${weekStart} to ${weekEnd}`);
-
-  const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   const prompt = `Weekly planning session. Let's plan next week (${weekStart} to ${weekEnd}).
 
@@ -41,54 +34,7 @@ export async function runWeeklyPlan(): Promise<string> {
 
 Keep the summary structured and clear.`;
 
-  let messages: Anthropic.MessageParam[] = [
-    { role: "user", content: prompt },
-  ];
-  let finalText = "";
-
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    const response = await claude.messages.create({
-      model: "claude-sonnet-4-5-20250929",
-      max_tokens: 4096,
-      system: getSystemPrompt(),
-      tools: AI_TOOLS,
-      messages,
-    });
-
-    const toolUseBlocks = response.content.filter(
-      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
-    );
-    const textBlocks = response.content.filter(
-      (b): b is Anthropic.TextBlock => b.type === "text"
-    );
-
-    if (textBlocks.length > 0) {
-      finalText += textBlocks.map((b) => b.text).join("\n");
-    }
-
-    if (toolUseBlocks.length === 0 || response.stop_reason === "end_turn") {
-      break;
-    }
-
-    const toolResults: Anthropic.ToolResultBlockParam[] = [];
-    for (const block of toolUseBlocks) {
-      const result = await handleToolCall(
-        block.name,
-        block.input as Record<string, unknown>
-      );
-      toolResults.push({
-        type: "tool_result",
-        tool_use_id: block.id,
-        content: result,
-      });
-    }
-
-    messages = [
-      ...messages,
-      { role: "assistant" as const, content: response.content },
-      { role: "user" as const, content: toolResults },
-    ];
-  }
+  const { text: finalText } = await kimiPlan(prompt, 12);
 
   await sendPushNotification({
     title: "Weekly Plan Ready",

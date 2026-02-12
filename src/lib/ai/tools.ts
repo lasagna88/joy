@@ -1,12 +1,23 @@
-import type Anthropic from "@anthropic-ai/sdk";
+// Canonical tool definitions — model-agnostic
+// Converters at bottom produce Gemini and OpenAI formats
 
-export const AI_TOOLS: Anthropic.Tool[] = [
+interface ToolDef {
+  name: string;
+  description: string;
+  input_schema: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required: string[];
+  };
+}
+
+export const AI_TOOLS: ToolDef[] = [
   {
     name: "create_task",
     description:
       "Create a new task in Scott's inbox. Use this when Scott mentions something he needs to do, an appointment, a follow-up, or any actionable item.",
     input_schema: {
-      type: "object" as const,
+      type: "object",
       properties: {
         title: {
           type: "string",
@@ -66,7 +77,7 @@ export const AI_TOOLS: Anthropic.Tool[] = [
     description:
       "Update an existing task — change status, priority, or other fields. Use this when Scott says he's done with something, wants to cancel a task, or change details.",
     input_schema: {
-      type: "object" as const,
+      type: "object",
       properties: {
         task_id: {
           type: "string",
@@ -104,7 +115,7 @@ export const AI_TOOLS: Anthropic.Tool[] = [
     description:
       "Retrieve tasks from the database. Use this to check what's in the inbox, see scheduled items, or find tasks to reference.",
     input_schema: {
-      type: "object" as const,
+      type: "object",
       properties: {
         status: {
           type: "string",
@@ -143,7 +154,7 @@ export const AI_TOOLS: Anthropic.Tool[] = [
     description:
       "Create a calendar event (time block) on a specific date. Use this when planning a day or scheduling a specific task into a time slot.",
     input_schema: {
-      type: "object" as const,
+      type: "object",
       properties: {
         title: {
           type: "string",
@@ -203,7 +214,7 @@ export const AI_TOOLS: Anthropic.Tool[] = [
     description:
       "Delete a calendar event. Use when clearing a day's schedule for replanning, or removing a single event.",
     input_schema: {
-      type: "object" as const,
+      type: "object",
       properties: {
         event_id: {
           type: "string",
@@ -218,7 +229,7 @@ export const AI_TOOLS: Anthropic.Tool[] = [
     description:
       "List calendar events for a given date or date range. Use this to see what's already scheduled before planning.",
     input_schema: {
-      type: "object" as const,
+      type: "object",
       properties: {
         date: {
           type: "string",
@@ -241,7 +252,7 @@ export const AI_TOOLS: Anthropic.Tool[] = [
     description:
       "Remove all AI-planned events for a specific date (keeps blocker events and external events). Use before replanning a day.",
     input_schema: {
-      type: "object" as const,
+      type: "object",
       properties: {
         date: {
           type: "string",
@@ -256,7 +267,7 @@ export const AI_TOOLS: Anthropic.Tool[] = [
     description:
       "Get Scott's scheduling preferences (work hours, lunch time, buffer durations, etc.)",
     input_schema: {
-      type: "object" as const,
+      type: "object",
       properties: {},
       required: [],
     },
@@ -266,7 +277,7 @@ export const AI_TOOLS: Anthropic.Tool[] = [
     description:
       "List active goals with their weekly hour targets.",
     input_schema: {
-      type: "object" as const,
+      type: "object",
       properties: {},
       required: [],
     },
@@ -276,7 +287,7 @@ export const AI_TOOLS: Anthropic.Tool[] = [
     description:
       "Create a new goal with a weekly hours target.",
     input_schema: {
-      type: "object" as const,
+      type: "object",
       properties: {
         title: {
           type: "string",
@@ -299,3 +310,36 @@ export const AI_TOOLS: Anthropic.Tool[] = [
     },
   },
 ];
+
+/** Convert AI_TOOLS to Gemini functionDeclarations format */
+export function toGeminiTools() {
+  return [
+    {
+      functionDeclarations: AI_TOOLS.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: {
+          type: "OBJECT" as const,
+          properties: tool.input_schema.properties,
+          required: tool.input_schema.required,
+        },
+      })),
+    },
+  ];
+}
+
+/** Convert AI_TOOLS to OpenAI-compatible format (for Kimi K2.5) */
+export function toOpenAITools() {
+  return AI_TOOLS.map((tool) => ({
+    type: "function" as const,
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: {
+        type: "object" as const,
+        properties: tool.input_schema.properties,
+        required: tool.input_schema.required,
+      },
+    },
+  }));
+}
