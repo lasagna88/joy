@@ -72,7 +72,7 @@ export async function exchangeCodeForTokens(
   accountsServer?: string
 ) {
   // Use the accounts server from the callback (respects user's data center)
-  const accountsUrl = accountsServer || DEFAULT_ZOHO_ACCOUNTS_URL;
+  const accountsUrl = accountsServer || ZOHO_ACCOUNTS_URL;
   zohoAccountsUrl = accountsUrl;
 
   const params = new URLSearchParams({
@@ -304,7 +304,7 @@ export async function disconnect() {
   if (state?.refreshToken) {
     const config = state.config as Record<string, unknown> | null;
     const accountsUrl =
-      (config?.accountsUrl as string) || DEFAULT_ZOHO_ACCOUNTS_URL;
+      (config?.accountsUrl as string) || ZOHO_ACCOUNTS_URL;
     try {
       await fetch(
         `${accountsUrl}/oauth/v2/token/revoke?token=${state.refreshToken}`,
