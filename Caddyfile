@@ -1,0 +1,9 @@
+# Replace with your domain when ready
+# yourdomain.com {
+#   reverse_proxy app:3000
+# }
+
+# Development: HTTP only
+:80 {
+  reverse_proxy app:3000
+}
