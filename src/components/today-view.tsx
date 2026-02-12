@@ -104,7 +104,7 @@ export function TodayView() {
   }, [fetchEvents]);
 
   const handleVoiceQuickAdd = useCallback(async (text: string) => {
-    setVoiceStatus("Sending to Papwa...");
+    setVoiceStatus("Sending to Joy...");
     try {
       const res = await fetch("/api/chat", {
         method: "POST",

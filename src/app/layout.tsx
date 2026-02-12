@@ -9,13 +9,13 @@ const geistSans = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "Papwa",
+  title: "Joy",
   description: "AI Personal Work Assistant",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Papwa",
+    title: "Joy",
   },
 };
 

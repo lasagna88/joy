@@ -135,7 +135,7 @@ export function InboxView() {
           </svg>
           <p className="text-zinc-500 text-lg font-medium">Inbox empty</p>
           <p className="text-zinc-600 text-sm mt-1">
-            Tell Papwa about tasks in Chat — they'll appear here
+            Tell Joy about tasks in Chat — they'll appear here
           </p>
         </div>
       ) : (

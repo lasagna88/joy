@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-const CACHE_NAME = "papwa-v1";
+const CACHE_NAME = "joy-v1";
 const OFFLINE_URL = "/";
 
 // Assets to pre-cache
@@ -57,13 +57,13 @@ self.addEventListener("fetch", (event) => {
 self.addEventListener("push", (event) => {
   const data = event.data ? event.data.json() : {};
   const options = {
-    body: data.body || "You have an update from Papwa",
+    body: data.body || "You have an update from Joy",
     icon: "/icons/icon-192.png",
     badge: "/icons/icon-192.png",
     data: { url: data.url || "/" },
     vibrate: [200, 100, 200],
   };
-  event.waitUntil(self.registration.showNotification(data.title || "Papwa", options));
+  event.waitUntil(self.registration.showNotification(data.title || "Joy", options));
 });
 
 // Notification click: open the app

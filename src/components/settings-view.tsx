@@ -555,14 +555,14 @@ export function SettingsView() {
             </div>
 
             <p className="text-xs text-zinc-600">
-              Auto-syncs every 30 minutes. Papwa events appear in Google
+              Auto-syncs every 30 minutes. Joy events appear in Google
               Calendar and external events show as blockers.
             </p>
           </div>
         ) : (
           <div className="space-y-3">
             <p className="text-sm text-zinc-400">
-              Connect Google Calendar to sync your schedule. Papwa events will
+              Connect Google Calendar to sync your schedule. Joy events will
               appear on your phone&apos;s calendar and external events will show
               as blockers the AI won&apos;t schedule over.
             </p>
@@ -635,7 +635,7 @@ export function SettingsView() {
 
             <p className="text-xs text-zinc-600">
               Auto-syncs every 15 minutes. Deals and tasks from Bigin appear in
-              your Papwa inbox for scheduling.
+              your Joy inbox for scheduling.
             </p>
           </div>
         ) : (

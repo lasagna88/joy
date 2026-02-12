@@ -6,7 +6,7 @@ const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || "fallback-dev-secret-change-me"
 );
 
-const TOKEN_NAME = "papwa-token";
+const TOKEN_NAME = "joy-token";
 const TOKEN_MAX_AGE = 30 * 24 * 60 * 60; // 30 days
 
 export async function hashPassphrase(passphrase: string): Promise<string> {

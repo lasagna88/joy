@@ -39,7 +39,7 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-zinc-950 px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <h1 className="text-3xl font-bold text-white">Papwa</h1>
+          <h1 className="text-3xl font-bold text-white">Joy</h1>
           <p className="mt-2 text-zinc-400">Your AI work assistant</p>
         </div>
 

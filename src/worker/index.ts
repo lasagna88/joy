@@ -193,7 +193,7 @@ for (const worker of [planningWorker, notificationWorker, syncWorker]) {
 // Start
 setupSchedules()
   .then(() => {
-    console.log("[worker] Papwa worker started. Listening for jobs...");
+    console.log("[worker] Joy worker started. Listening for jobs...");
   })
   .catch((err) => {
     console.error("[worker] Failed to set up schedules:", err);

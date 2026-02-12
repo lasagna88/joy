@@ -83,7 +83,7 @@ Keep the summary brief and actionable.`;
 
   await sendPushNotification({
     title: "Good Morning — Your Day is Planned",
-    body: briefBody || "Your schedule is ready. Open Papwa to see it.",
+    body: briefBody || "Your schedule is ready. Open Joy to see it.",
     url: "/",
     type: "morning_briefing",
   });
