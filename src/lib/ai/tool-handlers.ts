@@ -6,6 +6,7 @@ import {
   pushEventToGoogle,
   deleteGoogleEvent,
   isConnected as isGoogleConnected,
+  getCategoryCalendarType,
 } from "@/lib/google-calendar";
 
 type ToolInput = Record<string, unknown>;
@@ -197,6 +198,7 @@ async function handleCreateCalendarEvent(input: ToolInput): Promise<string> {
   };
 
   const category = (input.category as string) || "other";
+  const calendarType = getCategoryCalendarType(category);
 
   const [event] = await db
     .insert(calendarEvents)
@@ -210,7 +212,7 @@ async function handleCreateCalendarEvent(input: ToolInput): Promise<string> {
       source: "ai_planned",
       isBlocker: (input.is_blocker as boolean) || false,
       color: categoryColorMap[category] || "zinc",
-      metadata: { category },
+      metadata: { category, calendarType },
     })
     .returning();
 
@@ -225,6 +227,7 @@ async function handleCreateCalendarEvent(input: ToolInput): Promise<string> {
         startTime: event.startTime,
         endTime: event.endTime,
         location: event.location,
+        calendarType,
       });
     }
   } catch (err) {
@@ -259,7 +262,9 @@ async function handleDeleteCalendarEvent(input: ToolInput): Promise<string> {
   // Remove from Google Calendar if it was synced
   if (deleted.googleEventId) {
     try {
-      await deleteGoogleEvent(deleted.googleEventId);
+      const meta = deleted.metadata as Record<string, unknown> | null;
+      const calType = (meta?.calendarType as "work" | "personal") || undefined;
+      await deleteGoogleEvent(deleted.googleEventId, calType);
     } catch (err) {
       console.error("[tool] Failed to delete Google Calendar event:", err);
     }
@@ -343,7 +348,9 @@ async function handleClearDaySchedule(input: ToolInput): Promise<string> {
   for (const event of deleted) {
     if (event.googleEventId) {
       try {
-        await deleteGoogleEvent(event.googleEventId);
+        const meta = event.metadata as Record<string, unknown> | null;
+        const calType = (meta?.calendarType as "work" | "personal") || undefined;
+        await deleteGoogleEvent(event.googleEventId, calType);
       } catch (err) {
         console.error("[tool] Failed to delete Google event:", err);
       }

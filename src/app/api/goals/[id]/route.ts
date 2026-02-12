@@ -18,6 +18,10 @@ export async function PATCH(
       updates.weeklyHoursTarget = body.weeklyHoursTarget;
     if (body.monthlyHoursTarget !== undefined)
       updates.monthlyHoursTarget = body.monthlyHoursTarget;
+    if (body.type) updates.type = body.type;
+    if (body.sessionDuration !== undefined)
+      updates.sessionDuration = body.sessionDuration;
+    if (body.frequency !== undefined) updates.frequency = body.frequency;
     if (body.color) updates.color = body.color;
     if (body.isActive !== undefined) updates.isActive = body.isActive;
 

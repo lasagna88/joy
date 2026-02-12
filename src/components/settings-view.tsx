@@ -71,6 +71,7 @@ function NumberInput({
 interface IntegrationStatus {
   connected: boolean;
   lastSyncAt?: string | null;
+  workCalendarId?: string | null;
 }
 
 export function SettingsView() {
@@ -81,6 +82,8 @@ export function SettingsView() {
   const [gcalLoading, setGcalLoading] = useState(false);
   const [gcalMessage, setGcalMessage] = useState<string | null>(null);
   const [gcalSyncing, setGcalSyncing] = useState(false);
+  const [workCalendarId, setWorkCalendarId] = useState("");
+  const [workCalSaving, setWorkCalSaving] = useState(false);
   const [biginStatus, setBiginStatus] = useState<IntegrationStatus | null>(null);
   const [biginLoading, setBiginLoading] = useState(false);
   const [biginMessage, setBiginMessage] = useState<string | null>(null);
@@ -98,6 +101,9 @@ export function SettingsView() {
       if (res.ok) {
         const data = await res.json();
         setGcalStatus(data);
+        if (data.workCalendarId) {
+          setWorkCalendarId(data.workCalendarId);
+        }
       }
     } catch {
       setGcalStatus({ connected: false });
@@ -252,6 +258,28 @@ export function SettingsView() {
       setGcalMessage("Sync error.");
     } finally {
       setGcalSyncing(false);
+      setTimeout(() => setGcalMessage(null), 4000);
+    }
+  }
+
+  async function saveWorkCalendarId() {
+    setWorkCalSaving(true);
+    try {
+      const res = await fetch("/api/integrations/google", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workCalendarId: workCalendarId.trim() || null }),
+      });
+      if (res.ok) {
+        setGcalMessage("Work calendar ID saved.");
+        setTimeout(() => setGcalMessage(null), 3000);
+      } else {
+        setGcalMessage("Failed to save work calendar ID.");
+      }
+    } catch {
+      setGcalMessage("Failed to save work calendar ID.");
+    } finally {
+      setWorkCalSaving(false);
       setTimeout(() => setGcalMessage(null), 4000);
     }
   }
@@ -558,6 +586,34 @@ export function SettingsView() {
               Auto-syncs every 30 minutes. Joy events appear in Google
               Calendar and external events show as blockers.
             </p>
+
+            {/* Work Calendar ID */}
+            <div className="border-t border-zinc-800 pt-3 mt-3 space-y-2">
+              <label className="text-xs text-zinc-400 font-medium block">
+                Work Calendar ID
+              </label>
+              <p className="text-[11px] text-zinc-600">
+                To pull work events as blockers, share your aurumsolar.ca
+                calendar with scottywc88@gmail.com, then paste the Calendar ID
+                (found in Google Calendar settings &rarr; Integrate calendar).
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={workCalendarId}
+                  onChange={(e) => setWorkCalendarId(e.target.value)}
+                  placeholder="e.g. scottc@aurumsolar.ca"
+                  className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
+                />
+                <button
+                  onClick={saveWorkCalendarId}
+                  disabled={workCalSaving}
+                  className="rounded-lg bg-zinc-700 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-600 disabled:opacity-50"
+                >
+                  {workCalSaving ? "..." : "Save"}
+                </button>
+              </div>
+            </div>
           </div>
         ) : (
           <div className="space-y-3">

@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import {
   getAuthUrl,
   getConnectionStatus,
   disconnect,
+  setWorkCalendarId,
 } from "@/lib/google-calendar";
 
 /**
@@ -39,6 +40,25 @@ export async function POST() {
     console.error("[api/integrations/google] Auth URL error:", error);
     return NextResponse.json(
       { error: "Failed to generate auth URL" },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * PATCH /api/integrations/google — Update Google Calendar config
+ */
+export async function PATCH(request: NextRequest) {
+  try {
+    const body = await request.json();
+    if (body.workCalendarId !== undefined) {
+      await setWorkCalendarId(body.workCalendarId || null);
+    }
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("[api/integrations/google] Config update error:", error);
+    return NextResponse.json(
+      { error: "Failed to update config" },
       { status: 500 }
     );
   }

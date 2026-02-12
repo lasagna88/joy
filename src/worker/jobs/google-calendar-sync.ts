@@ -7,6 +7,29 @@ import { google } from "googleapis";
 const client = postgres(process.env.DATABASE_URL!);
 const db = drizzle(client, { schema });
 
+const WORK_CATEGORIES = new Set([
+  "door_knocking",
+  "appointment",
+  "follow_up",
+  "admin",
+  "goal_work",
+  "lunch",
+  "travel",
+  "buffer",
+]);
+
+function getCategoryCalendarType(category: string): "work" | "personal" {
+  if (WORK_CATEGORIES.has(category)) return "work";
+  return "personal";
+}
+
+interface GoogleConfig {
+  joyCalendarId?: string;
+  joyWorkCalendarId?: string;
+  joyPersonalCalendarId?: string;
+  workCalendarId?: string;
+}
+
 /**
  * Google Calendar sync job — runs every 30 minutes from the worker.
  *
@@ -71,44 +94,100 @@ export async function runGoogleCalendarSync() {
   }
 
   const cal = google.calendar({ version: "v3", auth: oauth2 });
+  const config = (state.config as GoogleConfig) || {};
 
-  // Joy calendar for pushing events, primary for pulling blockers
-  let joyCalendarId =
-    (state.config as Record<string, string>)?.joyCalendarId || "primary";
+  let joyWorkCalendarId = config.joyWorkCalendarId;
+  let joyPersonalCalendarId = config.joyPersonalCalendarId;
 
-  // Lazy migration: create Joy calendar if not yet configured
-  if (joyCalendarId === "primary") {
+  // Lazy migration: create dual Joy calendars if not yet configured
+  if (!joyWorkCalendarId || !joyPersonalCalendarId) {
     try {
       const listRes = await cal.calendarList.list();
-      const existing = listRes.data.items?.find(
-        (c) => c.summary === "Joy" && c.accessRole === "owner"
+      const calendars = listRes.data.items || [];
+
+      // Find or create Joy Work
+      const existingWork = calendars.find(
+        (c) => c.summary === "Joy Work" && c.accessRole === "owner"
       );
-      if (existing?.id) {
-        joyCalendarId = existing.id;
+      if (existingWork?.id) {
+        joyWorkCalendarId = existingWork.id;
       } else {
         const createRes = await cal.calendars.insert({
           requestBody: {
-            summary: "Joy",
-            description: "Events planned by Joy AI",
+            summary: "Joy Work",
+            description: "Work events planned by Joy AI",
           },
         });
-        joyCalendarId = createRes.data.id!;
+        joyWorkCalendarId = createRes.data.id!;
         await cal.calendarList.update({
-          calendarId: joyCalendarId,
-          requestBody: { colorId: "7" },
+          calendarId: joyWorkCalendarId,
+          requestBody: { colorId: "9" },
         });
       }
+
+      // Find or create Joy Personal
+      const existingPersonal = calendars.find(
+        (c) => c.summary === "Joy Personal" && c.accessRole === "owner"
+      );
+      if (existingPersonal?.id) {
+        joyPersonalCalendarId = existingPersonal.id;
+      } else {
+        const createRes = await cal.calendars.insert({
+          requestBody: {
+            summary: "Joy Personal",
+            description: "Personal events planned by Joy AI",
+          },
+        });
+        joyPersonalCalendarId = createRes.data.id!;
+        await cal.calendarList.update({
+          calendarId: joyPersonalCalendarId,
+          requestBody: { colorId: "6" },
+        });
+      }
+
+      // Share both with work account
+      const shareEmail = "scottc@aurumsolar.ca";
+      for (const calId of [joyWorkCalendarId, joyPersonalCalendarId]) {
+        try {
+          await cal.acl.insert({
+            calendarId: calId,
+            requestBody: {
+              role: "reader",
+              scope: { type: "user", value: shareEmail },
+            },
+          });
+        } catch (err: unknown) {
+          const code = (err as { code?: number }).code;
+          if (code !== 409) {
+            console.error(`[gcal-sync] Failed to share ${calId}:`, err);
+          }
+        }
+      }
+
       await db
         .update(schema.integrationState)
         .set({
-          config: { joyCalendarId },
+          config: {
+            ...config,
+            joyWorkCalendarId,
+            joyPersonalCalendarId,
+          },
           updatedAt: new Date(),
         })
         .where(eq(schema.integrationState.provider, "google"));
-      console.log("[gcal-sync] Joy calendar ready:", joyCalendarId);
+      console.log("[gcal-sync] Dual Joy calendars ready — Work:", joyWorkCalendarId, "Personal:", joyPersonalCalendarId);
     } catch (err) {
-      console.error("[gcal-sync] Failed to create Joy calendar:", err);
+      console.error("[gcal-sync] Failed to create Joy calendars:", err);
     }
+  }
+
+  // Fallback to legacy single calendar
+  const legacyCalendarId = config.joyCalendarId || "primary";
+
+  function getCalendarIdForType(type: "work" | "personal"): string {
+    if (type === "work" && joyWorkCalendarId) return joyWorkCalendarId;
+    if (type === "personal" && joyPersonalCalendarId) return joyPersonalCalendarId;
+    return legacyCalendarId;
   }
 
   const now = new Date();
@@ -118,7 +197,7 @@ export async function runGoogleCalendarSync() {
   let pushed = 0;
   let pulled = 0;
 
-  // 1. Push unpushed Joy events to the Joy calendar
+  // 1. Push unpushed Joy events to the appropriate Joy calendar
   const { calendarEvents } = schema;
   const unpushedNull = await db
     .select()
@@ -138,8 +217,13 @@ export async function runGoogleCalendarSync() {
 
   for (const event of toPush) {
     try {
+      const metadata = event.metadata as Record<string, unknown> | null;
+      const category = (metadata?.category as string) || "other";
+      const calendarType = (metadata?.calendarType as "work" | "personal") || getCategoryCalendarType(category);
+      const targetCalendarId = getCalendarIdForType(calendarType);
+
       const res = await cal.events.insert({
-        calendarId: joyCalendarId,
+        calendarId: targetCalendarId,
         requestBody: {
           summary: event.title,
           description: event.description || undefined,
@@ -147,7 +231,10 @@ export async function runGoogleCalendarSync() {
           start: { dateTime: event.startTime.toISOString() },
           end: { dateTime: event.endTime.toISOString() },
           extendedProperties: {
-            private: { joyEventId: event.id },
+            private: {
+              joyEventId: event.id,
+              calendarType,
+            },
           },
         },
       });
@@ -164,68 +251,79 @@ export async function runGoogleCalendarSync() {
     }
   }
 
-  // 2. Pull external events as blockers from primary calendar
-  try {
-    const res = await cal.events.list({
-      calendarId: "primary",
-      timeMin: startDate.toISOString(),
-      timeMax: endDate.toISOString(),
-      singleEvents: true,
-      orderBy: "startTime",
-      maxResults: 100,
-    });
+  // 2. Pull external events as blockers from primary calendar + work calendar
+  const pullCalendarIds: string[] = ["primary"];
+  if (config.workCalendarId) {
+    pullCalendarIds.push(config.workCalendarId);
+  }
 
-    const googleEvents = res.data.items || [];
+  for (const pullCalId of pullCalendarIds) {
+    try {
+      const res = await cal.events.list({
+        calendarId: pullCalId,
+        timeMin: startDate.toISOString(),
+        timeMax: endDate.toISOString(),
+        singleEvents: true,
+        orderBy: "startTime",
+        maxResults: 100,
+      });
 
-    for (const gEvent of googleEvents) {
-      if (gEvent.extendedProperties?.private?.joyEventId) continue;
-      if (!gEvent.start?.dateTime || !gEvent.end?.dateTime) continue;
-      if (gEvent.status === "cancelled") continue;
-      if (!gEvent.id) continue;
+      const googleEvents = res.data.items || [];
 
-      const [existing] = await db
-        .select()
-        .from(calendarEvents)
-        .where(eq(calendarEvents.googleEventId, gEvent.id));
+      for (const gEvent of googleEvents) {
+        if (gEvent.extendedProperties?.private?.joyEventId) continue;
+        if (!gEvent.start?.dateTime || !gEvent.end?.dateTime) continue;
+        if (gEvent.status === "cancelled") continue;
+        if (!gEvent.id) continue;
 
-      if (existing) {
-        // Update if changed
-        const sTime = new Date(gEvent.start.dateTime);
-        const eTime = new Date(gEvent.end.dateTime);
-        if (
-          existing.title !== (gEvent.summary || "Busy") ||
-          existing.startTime.getTime() !== sTime.getTime() ||
-          existing.endTime.getTime() !== eTime.getTime()
-        ) {
-          await db
-            .update(calendarEvents)
-            .set({
-              title: gEvent.summary || "Busy",
-              startTime: sTime,
-              endTime: eTime,
-              location: gEvent.location || null,
-              updatedAt: new Date(),
-            })
-            .where(eq(calendarEvents.id, existing.id));
+        const [existing] = await db
+          .select()
+          .from(calendarEvents)
+          .where(eq(calendarEvents.googleEventId, gEvent.id));
+
+        if (existing) {
+          const sTime = new Date(gEvent.start.dateTime);
+          const eTime = new Date(gEvent.end.dateTime);
+          if (
+            existing.title !== (gEvent.summary || "Busy") ||
+            existing.startTime.getTime() !== sTime.getTime() ||
+            existing.endTime.getTime() !== eTime.getTime()
+          ) {
+            await db
+              .update(calendarEvents)
+              .set({
+                title: gEvent.summary || "Busy",
+                startTime: sTime,
+                endTime: eTime,
+                location: gEvent.location || null,
+                updatedAt: new Date(),
+              })
+              .where(eq(calendarEvents.id, existing.id));
+          }
+        } else {
+          const sourceLabel = pullCalId === "primary" ? "personal" : "work";
+          await db.insert(calendarEvents).values({
+            title: gEvent.summary || "Busy",
+            description: gEvent.description || null,
+            startTime: new Date(gEvent.start.dateTime),
+            endTime: new Date(gEvent.end.dateTime),
+            location: gEvent.location || null,
+            source: "google_calendar",
+            googleEventId: gEvent.id,
+            isBlocker: true,
+            color: "slate",
+            metadata: {
+              category: "other",
+              googleCalendar: true,
+              sourceCalendar: sourceLabel,
+            },
+          });
+          pulled++;
         }
-      } else {
-        await db.insert(calendarEvents).values({
-          title: gEvent.summary || "Busy",
-          description: gEvent.description || null,
-          startTime: new Date(gEvent.start.dateTime),
-          endTime: new Date(gEvent.end.dateTime),
-          location: gEvent.location || null,
-          source: "google_calendar",
-          googleEventId: gEvent.id,
-          isBlocker: true,
-          color: "slate",
-          metadata: { category: "other", googleCalendar: true },
-        });
-        pulled++;
       }
+    } catch (err) {
+      console.error(`[gcal-sync] Failed to pull events from ${pullCalId}:`, err);
     }
-  } catch (err) {
-    console.error("[gcal-sync] Failed to pull events:", err);
   }
 
   // 3. Update last sync time

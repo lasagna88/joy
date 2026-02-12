@@ -70,6 +70,15 @@ export function GoalsView() {
   const [formHours, setFormHours] = useState("5");
   const [formColor, setFormColor] = useState("cyan");
   const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editType, setEditType] = useState<"personal" | "work">("personal");
+  const [editSessionDuration, setEditSessionDuration] = useState("60");
+  const [editFrequency, setEditFrequency] = useState("");
+  const [editHours, setEditHours] = useState("5");
+  const [editColor, setEditColor] = useState("cyan");
+  const [editSaving, setEditSaving] = useState(false);
   const [goalProgress, setGoalProgress] = useState<Record<string, GoalProgress>>({});
 
   async function fetchGoals() {
@@ -167,8 +176,69 @@ export function GoalsView() {
     try {
       await fetch(`/api/goals/${id}`, { method: "DELETE" });
       setGoals((prev) => prev.filter((g) => g.id !== id));
+      if (editingId === id) setEditingId(null);
     } catch {
       // Error
+    }
+  }
+
+  function startEditing(goal: Goal) {
+    setEditingId(goal.id);
+    setEditTitle(goal.title);
+    setEditDescription(goal.description || "");
+    setEditType((goal.type as "personal" | "work") || "personal");
+    setEditSessionDuration(goal.sessionDuration?.toString() || "60");
+    setEditFrequency(goal.frequency || "");
+    setEditHours(goal.weeklyHoursTarget?.toString() || "5");
+    setEditColor(goal.color || "cyan");
+  }
+
+  // Auto-calculate weekly hours when editing frequency/duration changes
+  useEffect(() => {
+    if (!editingId || !editFrequency || !editSessionDuration) return;
+    const duration = parseInt(editSessionDuration) || 60;
+    const sessionsPerWeek: Record<string, number> = {
+      daily: 7,
+      "2x_per_week": 2,
+      "3x_per_week": 3,
+      "4x_per_week": 4,
+      "5x_per_week": 5,
+      weekly: 1,
+      biweekly: 0.5,
+      monthly: 0.25,
+      "2x_per_month": 0.5,
+      "3x_per_month": 0.75,
+    };
+    const sessions = sessionsPerWeek[editFrequency] || 0;
+    const hours = (sessions * duration) / 60;
+    setEditHours(hours.toString());
+  }, [editingId, editFrequency, editSessionDuration]);
+
+  async function saveEdit() {
+    if (!editingId || !editTitle.trim()) return;
+    setEditSaving(true);
+    try {
+      const res = await fetch(`/api/goals/${editingId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: editTitle.trim(),
+          description: editDescription.trim() || null,
+          type: editType,
+          sessionDuration: editFrequency ? parseInt(editSessionDuration) || 60 : null,
+          frequency: editFrequency || null,
+          weeklyHoursTarget: parseFloat(editHours) || 5,
+          color: editColor,
+        }),
+      });
+      if (res.ok) {
+        setEditingId(null);
+        await fetchGoals();
+      }
+    } catch {
+      // Error
+    } finally {
+      setEditSaving(false);
     }
   }
 
@@ -338,11 +408,126 @@ export function GoalsView() {
             const target = goal.weeklyHoursTarget || 0;
             const actual = progress?.weeklyHoursActual || 0;
             const pct = target > 0 ? Math.min((actual / target) * 100, 100) : 0;
+            const isEditing = editingId === goal.id;
+
+            if (isEditing) {
+              return (
+                <div
+                  key={goal.id}
+                  className="rounded-xl border border-blue-500/50 bg-zinc-900 p-4 space-y-3"
+                >
+                  <input
+                    type="text"
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+                    autoFocus
+                  />
+                  <textarea
+                    value={editDescription}
+                    onChange={(e) => setEditDescription(e.target.value)}
+                    placeholder="Description (optional)"
+                    rows={2}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:border-blue-500 focus:outline-none resize-none"
+                  />
+                  <div>
+                    <label className="text-xs text-zinc-500 block mb-1">Type</label>
+                    <div className="flex rounded-lg bg-zinc-800 p-0.5">
+                      {(["personal", "work"] as const).map((t) => (
+                        <button
+                          key={t}
+                          onClick={() => setEditType(t)}
+                          className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                            editType === t
+                              ? "bg-zinc-600 text-white"
+                              : "text-zinc-400 hover:text-zinc-300"
+                          }`}
+                        >
+                          {t === "personal" ? "Personal" : "Work"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex gap-3">
+                    <div className="flex-1">
+                      <label className="text-xs text-zinc-500 block mb-1">Frequency</label>
+                      <select
+                        value={editFrequency}
+                        onChange={(e) => setEditFrequency(e.target.value)}
+                        className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white [color-scheme:dark]"
+                      >
+                        {frequencyOptions.map((f) => (
+                          <option key={f.value} value={f.value}>{f.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {editFrequency && (
+                      <div className="flex-1">
+                        <label className="text-xs text-zinc-500 block mb-1">Session (min)</label>
+                        <input
+                          type="number"
+                          value={editSessionDuration}
+                          onChange={(e) => setEditSessionDuration(e.target.value)}
+                          min="15"
+                          step="15"
+                          className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white [color-scheme:dark]"
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1">
+                      <label className="text-xs text-zinc-500 block mb-1">Weekly hours</label>
+                      <input
+                        type="number"
+                        value={editHours}
+                        onChange={(e) => setEditHours(e.target.value)}
+                        min="0.5"
+                        step="0.5"
+                        className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white [color-scheme:dark]"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-xs text-zinc-500 block mb-1">Color</label>
+                      <div className="flex gap-2">
+                        {colorOptions.map((c) => (
+                          <button
+                            key={c.value}
+                            onClick={() => setEditColor(c.value)}
+                            className={`h-7 w-7 rounded-full ${c.class} ${
+                              editColor === c.value
+                                ? "ring-2 ring-white ring-offset-2 ring-offset-zinc-900"
+                                : ""
+                            }`}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={saveEdit}
+                      disabled={!editTitle.trim() || editSaving}
+                      className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {editSaving ? "Saving..." : "Save"}
+                    </button>
+                    <button
+                      onClick={() => setEditingId(null)}
+                      className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 py-2 text-sm text-zinc-300 hover:bg-zinc-700"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              );
+            }
 
             return (
               <div
                 key={goal.id}
-                className="rounded-xl border border-zinc-800 bg-zinc-900 p-4"
+                onClick={() => startEditing(goal)}
+                className="rounded-xl border border-zinc-800 bg-zinc-900 p-4 cursor-pointer active:border-zinc-600 transition-colors"
               >
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-2.5">
@@ -374,7 +559,7 @@ export function GoalsView() {
                     </div>
                   </div>
                   <button
-                    onClick={() => deleteGoal(goal.id)}
+                    onClick={(e) => { e.stopPropagation(); deleteGoal(goal.id); }}
                     className="text-zinc-600 hover:text-red-400 transition-colors p-1"
                   >
                     <svg

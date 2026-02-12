@@ -5,6 +5,44 @@ import { eq, and, gte, lt, isNotNull } from "drizzle-orm";
 
 const SCOPES = ["https://www.googleapis.com/auth/calendar"];
 
+const WORK_CATEGORIES = new Set([
+  "door_knocking",
+  "appointment",
+  "follow_up",
+  "admin",
+  "goal_work",
+  "lunch",
+  "travel",
+  "buffer",
+]);
+
+const PERSONAL_CATEGORIES = new Set([
+  "personal",
+  "exercise",
+  "errands",
+  "partner_time",
+  "meal_prep",
+  "cleaning",
+]);
+
+export type CalendarType = "work" | "personal";
+
+/**
+ * Determine which Joy calendar an event belongs to based on its category.
+ */
+export function getCategoryCalendarType(category: string): CalendarType {
+  if (PERSONAL_CATEGORIES.has(category)) return "personal";
+  if (WORK_CATEGORIES.has(category)) return "work";
+  return "work"; // default work
+}
+
+interface GoogleConfig {
+  joyCalendarId?: string;
+  joyWorkCalendarId?: string;
+  joyPersonalCalendarId?: string;
+  workCalendarId?: string;
+}
+
 function getOAuth2Client() {
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -13,50 +51,138 @@ function getOAuth2Client() {
   );
 }
 
-/**
- * Read the Joy calendar ID from integration config, falling back to "primary"
- */
-async function getJoyCalendarId(): Promise<string> {
+async function getGoogleConfig(): Promise<GoogleConfig> {
   const [state] = await db
     .select()
     .from(integrationState)
     .where(eq(integrationState.provider, "google"));
 
-  return (state?.config as Record<string, string>)?.joyCalendarId || "primary";
+  return (state?.config as GoogleConfig) || {};
 }
 
 /**
- * Find an existing "Joy" secondary calendar or create one.
- * Returns the calendar ID (e.g. abc123@group.calendar.google.com).
+ * Get the Joy calendar ID for a given type. Falls back to legacy joyCalendarId or "primary".
  */
-async function createOrFindJoyCalendar(
-  cal: calendar_v3.Calendar
+async function getJoyCalendarId(type?: CalendarType): Promise<string> {
+  const config = await getGoogleConfig();
+
+  if (type === "work" && config.joyWorkCalendarId) return config.joyWorkCalendarId;
+  if (type === "personal" && config.joyPersonalCalendarId) return config.joyPersonalCalendarId;
+
+  // Backwards compat: fall back to single calendar
+  return config.joyCalendarId || "primary";
+}
+
+/**
+ * Get both Joy calendar IDs (for operations that need to check both).
+ */
+async function getJoyCalendarIds(): Promise<string[]> {
+  const config = await getGoogleConfig();
+  const ids: string[] = [];
+
+  if (config.joyWorkCalendarId) ids.push(config.joyWorkCalendarId);
+  if (config.joyPersonalCalendarId) ids.push(config.joyPersonalCalendarId);
+
+  // Backwards compat: include legacy single calendar if no dual calendars
+  if (ids.length === 0 && config.joyCalendarId) {
+    ids.push(config.joyCalendarId);
+  }
+
+  return ids.length > 0 ? ids : ["primary"];
+}
+
+/**
+ * Share a calendar with another email (reader access). Non-fatal on error.
+ */
+async function shareCalendar(
+  cal: calendar_v3.Calendar,
+  calendarId: string,
+  email: string
+) {
+  try {
+    await cal.acl.insert({
+      calendarId,
+      requestBody: {
+        role: "reader",
+        scope: { type: "user", value: email },
+      },
+    });
+    console.log(`[gcal] Shared ${calendarId} with ${email}`);
+  } catch (err: unknown) {
+    const code = (err as { code?: number }).code;
+    if (code === 409) {
+      // Already shared
+      return;
+    }
+    console.error(`[gcal] Failed to share calendar with ${email}:`, err);
+  }
+}
+
+/**
+ * Find or create a named Joy calendar with a specific color.
+ */
+async function findOrCreateCalendar(
+  cal: calendar_v3.Calendar,
+  calendarList: calendar_v3.Schema$CalendarListEntry[],
+  summary: string,
+  description: string,
+  colorId: string
 ): Promise<string> {
-  // Search existing calendars
-  const listRes = await cal.calendarList.list();
-  const existing = listRes.data.items?.find(
-    (c) => c.summary === "Joy" && c.accessRole === "owner"
+  const existing = calendarList.find(
+    (c) => c.summary === summary && c.accessRole === "owner"
   );
   if (existing?.id) return existing.id;
 
-  // Create a new secondary calendar
   const createRes = await cal.calendars.insert({
     requestBody: {
-      summary: "Joy",
-      description: "Events planned by Joy AI",
+      summary,
+      description,
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     },
   });
 
   const newId = createRes.data.id!;
 
-  // Set calendar color (blue — colorId "7" in Google Calendar)
   await cal.calendarList.update({
     calendarId: newId,
-    requestBody: { colorId: "7" },
+    requestBody: { colorId },
   });
 
   return newId;
+}
+
+/**
+ * Create or find both Joy Work and Joy Personal calendars.
+ * Auto-shares both with the work email. Handles migration from legacy single "Joy" calendar.
+ */
+async function createOrFindJoyCalendars(
+  cal: calendar_v3.Calendar
+): Promise<{ joyWorkCalendarId: string; joyPersonalCalendarId: string }> {
+  const listRes = await cal.calendarList.list();
+  const calendars = listRes.data.items || [];
+
+  const joyWorkCalendarId = await findOrCreateCalendar(
+    cal,
+    calendars,
+    "Joy Work",
+    "Work events planned by Joy AI",
+    "9" // bold blue
+  );
+
+  const joyPersonalCalendarId = await findOrCreateCalendar(
+    cal,
+    calendars,
+    "Joy Personal",
+    "Personal events planned by Joy AI",
+    "6" // flamingo/orange
+  );
+
+  // Share both with work account
+  const shareEmail = "scottc@aurumsolar.ca";
+  await shareCalendar(cal, joyWorkCalendarId, shareEmail);
+  await shareCalendar(cal, joyPersonalCalendarId, shareEmail);
+
+  return { joyWorkCalendarId, joyPersonalCalendarId };
 }
 
 /**
@@ -78,6 +204,9 @@ export async function exchangeCodeForTokens(code: string) {
   const oauth2 = getOAuth2Client();
   const { tokens } = await oauth2.getToken(code);
 
+  // Preserve existing config (e.g. workCalendarId) on reconnect
+  const existingConfig = await getGoogleConfig();
+
   await db
     .insert(integrationState)
     .values({
@@ -88,7 +217,7 @@ export async function exchangeCodeForTokens(code: string) {
         ? new Date(tokens.expiry_date)
         : null,
       isActive: true,
-      config: {},
+      config: existingConfig,
       lastSyncAt: null,
     })
     .onConflictDoUpdate({
@@ -104,25 +233,34 @@ export async function exchangeCodeForTokens(code: string) {
       },
     });
 
-  // Create or find the dedicated "Joy" calendar
+  // Create or find the dual Joy calendars
   try {
-    const oauth2 = getOAuth2Client();
-    oauth2.setCredentials(tokens);
-    const cal = google.calendar({ version: "v3", auth: oauth2 });
-    const joyCalendarId = await createOrFindJoyCalendar(cal);
+    const authClient = getOAuth2Client();
+    authClient.setCredentials(tokens);
+    const cal = google.calendar({ version: "v3", auth: authClient });
+    const { joyWorkCalendarId, joyPersonalCalendarId } =
+      await createOrFindJoyCalendars(cal);
 
     await db
       .update(integrationState)
       .set({
-        config: { joyCalendarId },
+        config: {
+          ...existingConfig,
+          joyWorkCalendarId,
+          joyPersonalCalendarId,
+        },
         updatedAt: new Date(),
       })
       .where(eq(integrationState.provider, "google"));
 
-    console.log("[gcal] Joy calendar ready:", joyCalendarId);
+    console.log(
+      "[gcal] Joy calendars ready — Work:",
+      joyWorkCalendarId,
+      "Personal:",
+      joyPersonalCalendarId
+    );
   } catch (err) {
-    console.error("[gcal] Failed to create Joy calendar:", err);
-    // Non-fatal — fullSync will retry via lazy migration
+    console.error("[gcal] Failed to create Joy calendars:", err);
   }
 
   return tokens;
@@ -170,7 +308,6 @@ async function getCalendarClient(): Promise<calendar_v3.Calendar | null> {
       oauth2.setCredentials(credentials);
     } catch (err) {
       console.error("[gcal] Token refresh failed:", err);
-      // Mark as inactive if refresh fails
       await db
         .update(integrationState)
         .set({ isActive: false, updatedAt: new Date() })
@@ -209,10 +346,13 @@ export async function getConnectionStatus() {
 
   if (!state) return { connected: false };
 
+  const config = (state.config as GoogleConfig) || {};
+
   return {
     connected: state.isActive,
     lastSyncAt: state.lastSyncAt,
     tokenExpiresAt: state.tokenExpiresAt,
+    workCalendarId: config.workCalendarId || null,
   };
 }
 
@@ -248,7 +388,22 @@ export async function disconnect() {
 }
 
 /**
+ * Update the work calendar ID in integration config
+ */
+export async function setWorkCalendarId(workCalendarId: string | null) {
+  const config = await getGoogleConfig();
+  await db
+    .update(integrationState)
+    .set({
+      config: { ...config, workCalendarId: workCalendarId || undefined },
+      updatedAt: new Date(),
+    })
+    .where(eq(integrationState.provider, "google"));
+}
+
+/**
  * Push a single Joy event to Google Calendar. Returns the Google event ID.
+ * Routes to Joy Work or Joy Personal calendar based on calendarType.
  */
 export async function pushEventToGoogle(event: {
   id: string;
@@ -257,11 +412,12 @@ export async function pushEventToGoogle(event: {
   startTime: Date;
   endTime: Date;
   location?: string | null;
+  calendarType?: CalendarType;
 }): Promise<string | null> {
   const cal = await getCalendarClient();
   if (!cal) return null;
 
-  const calendarId = await getJoyCalendarId();
+  const calendarId = await getJoyCalendarId(event.calendarType);
 
   try {
     const res = await cal.events.insert({
@@ -279,6 +435,7 @@ export async function pushEventToGoogle(event: {
         extendedProperties: {
           private: {
             joyEventId: event.id,
+            calendarType: event.calendarType || "work",
           },
         },
       },
@@ -287,7 +444,6 @@ export async function pushEventToGoogle(event: {
     const googleEventId = res.data.id;
 
     if (googleEventId) {
-      // Store the Google event ID on our event
       await db
         .update(calendarEvents)
         .set({ googleEventId, updatedAt: new Date() })
@@ -302,7 +458,8 @@ export async function pushEventToGoogle(event: {
 }
 
 /**
- * Update an existing Google Calendar event
+ * Update an existing Google Calendar event.
+ * Tries the matching calendar type first, falls back to all Joy calendars.
  */
 export async function updateGoogleEvent(event: {
   id: string;
@@ -312,61 +469,80 @@ export async function updateGoogleEvent(event: {
   startTime: Date;
   endTime: Date;
   location?: string | null;
+  calendarType?: CalendarType;
 }): Promise<boolean> {
   const cal = await getCalendarClient();
   if (!cal) return false;
 
-  const calendarId = await getJoyCalendarId();
+  const calendarIds = event.calendarType
+    ? [await getJoyCalendarId(event.calendarType)]
+    : await getJoyCalendarIds();
 
-  try {
-    await cal.events.update({
-      calendarId,
-      eventId: event.googleEventId,
-      requestBody: {
-        summary: event.title,
-        description: event.description || undefined,
-        location: event.location || undefined,
-        start: {
-          dateTime: event.startTime.toISOString(),
+  for (const calendarId of calendarIds) {
+    try {
+      await cal.events.update({
+        calendarId,
+        eventId: event.googleEventId,
+        requestBody: {
+          summary: event.title,
+          description: event.description || undefined,
+          location: event.location || undefined,
+          start: {
+            dateTime: event.startTime.toISOString(),
+          },
+          end: {
+            dateTime: event.endTime.toISOString(),
+          },
         },
-        end: {
-          dateTime: event.endTime.toISOString(),
-        },
-      },
-    });
-    return true;
-  } catch (err) {
-    console.error("[gcal] Failed to update event:", err);
-    return false;
+      });
+      return true;
+    } catch (err: unknown) {
+      const code = (err as { code?: number }).code;
+      if (code === 404 && calendarIds.length > 1) continue;
+      console.error("[gcal] Failed to update event:", err);
+      return false;
+    }
   }
+
+  return false;
 }
 
 /**
- * Delete a Google Calendar event
+ * Delete a Google Calendar event. Tries all Joy calendars.
  */
 export async function deleteGoogleEvent(
-  googleEventId: string
+  googleEventId: string,
+  calendarType?: CalendarType
 ): Promise<boolean> {
   const cal = await getCalendarClient();
   if (!cal) return false;
 
-  const calendarId = await getJoyCalendarId();
+  const calendarIds = calendarType
+    ? [await getJoyCalendarId(calendarType)]
+    : await getJoyCalendarIds();
 
-  try {
-    await cal.events.delete({
-      calendarId,
-      eventId: googleEventId,
-    });
-    return true;
-  } catch (err) {
-    console.error("[gcal] Failed to delete event:", err);
-    return false;
+  for (const calendarId of calendarIds) {
+    try {
+      await cal.events.delete({
+        calendarId,
+        eventId: googleEventId,
+      });
+      return true;
+    } catch (err: unknown) {
+      const code = (err as { code?: number }).code;
+      if (code === 404 && calendarIds.length > 1) continue;
+      if (code === 404 || code === 410) return true; // already gone
+      console.error("[gcal] Failed to delete event:", err);
+      return false;
+    }
   }
+
+  return false;
 }
 
 /**
- * Pull external events from Google Calendar and create blocker events in Joy.
- * Only pulls events not created by Joy (no joyEventId in extended properties).
+ * Pull external events from one or more Google Calendars and create blocker events in Joy.
+ * Pulls from primary calendar + configured work calendar.
  */
 export async function pullExternalEvents(
   startDate: Date,
@@ -375,115 +551,123 @@ export async function pullExternalEvents(
   const cal = await getCalendarClient();
   if (!cal) return 0;
 
-  // Always pull blockers from the user's primary calendar
-  const calendarId = "primary";
+  const config = await getGoogleConfig();
 
-  try {
-    const res = await cal.events.list({
-      calendarId,
-      timeMin: startDate.toISOString(),
-      timeMax: endDate.toISOString(),
-      singleEvents: true,
-      orderBy: "startTime",
-      maxResults: 100,
-    });
-
-    const googleEvents = res.data.items || [];
-    let imported = 0;
-
-    for (const gEvent of googleEvents) {
-      // Skip events created by Joy
-      if (gEvent.extendedProperties?.private?.joyEventId) continue;
-
-      // Skip all-day events (no dateTime)
-      if (!gEvent.start?.dateTime || !gEvent.end?.dateTime) continue;
-
-      // Skip cancelled events
-      if (gEvent.status === "cancelled") continue;
-
-      const googleEventId = gEvent.id;
-      if (!googleEventId) continue;
-
-      // Check if we already have this event
-      const [existing] = await db
-        .select()
-        .from(calendarEvents)
-        .where(eq(calendarEvents.googleEventId, googleEventId));
-
-      if (existing) {
-        // Update if changed
-        const startTime = new Date(gEvent.start.dateTime);
-        const endTime = new Date(gEvent.end.dateTime);
-        const changed =
-          existing.title !== (gEvent.summary || "Busy") ||
-          existing.startTime.getTime() !== startTime.getTime() ||
-          existing.endTime.getTime() !== endTime.getTime() ||
-          existing.location !== (gEvent.location || null);
-
-        if (changed) {
-          await db
-            .update(calendarEvents)
-            .set({
-              title: gEvent.summary || "Busy",
-              startTime,
-              endTime,
-              location: gEvent.location || null,
-              description: gEvent.description || null,
-              updatedAt: new Date(),
-            })
-            .where(eq(calendarEvents.id, existing.id));
-        }
-      } else {
-        // Create new blocker event
-        await db.insert(calendarEvents).values({
-          title: gEvent.summary || "Busy",
-          description: gEvent.description || null,
-          startTime: new Date(gEvent.start.dateTime),
-          endTime: new Date(gEvent.end.dateTime),
-          location: gEvent.location || null,
-          source: "google_calendar",
-          googleEventId,
-          isBlocker: true,
-          color: "slate",
-          metadata: {
-            category: "other",
-            googleCalendar: true,
-          },
-        });
-        imported++;
-      }
-    }
-
-    // Remove Joy blocker events that no longer exist in Google Calendar
-    const googleEventIds = googleEvents
-      .filter((e) => e.id && !e.extendedProperties?.private?.joyEventId)
-      .map((e) => e.id!);
-
-    const joyBlockers = await db
-      .select()
-      .from(calendarEvents)
-      .where(
-        and(
-          eq(calendarEvents.source, "google_calendar"),
-          gte(calendarEvents.startTime, startDate),
-          lt(calendarEvents.startTime, endDate),
-          isNotNull(calendarEvents.googleEventId)
-        )
-      );
-
-    for (const blocker of joyBlockers) {
-      if (blocker.googleEventId && !googleEventIds.includes(blocker.googleEventId)) {
-        await db
-          .delete(calendarEvents)
-          .where(eq(calendarEvents.id, blocker.id));
-      }
-    }
-
-    return imported;
-  } catch (err) {
-    console.error("[gcal] Failed to pull events:", err);
-    return 0;
+  // Pull from primary + work calendar if configured
+  const pullCalendarIds: string[] = ["primary"];
+  if (config.workCalendarId) {
+    pullCalendarIds.push(config.workCalendarId);
   }
+
+  let imported = 0;
+  const allGoogleEventIds: string[] = [];
+
+  for (const calendarId of pullCalendarIds) {
+    try {
+      const res = await cal.events.list({
+        calendarId,
+        timeMin: startDate.toISOString(),
+        timeMax: endDate.toISOString(),
+        singleEvents: true,
+        orderBy: "startTime",
+        maxResults: 100,
+      });
+
+      const googleEvents = res.data.items || [];
+
+      for (const gEvent of googleEvents) {
+        // Skip events created by Joy
+        if (gEvent.extendedProperties?.private?.joyEventId) continue;
+
+        // Skip all-day events (no dateTime)
+        if (!gEvent.start?.dateTime || !gEvent.end?.dateTime) continue;
+
+        // Skip cancelled events
+        if (gEvent.status === "cancelled") continue;
+
+        const googleEventId = gEvent.id;
+        if (!googleEventId) continue;
+
+        allGoogleEventIds.push(googleEventId);
+
+        // Check if we already have this event
+        const [existing] = await db
+          .select()
+          .from(calendarEvents)
+          .where(eq(calendarEvents.googleEventId, googleEventId));
+
+        if (existing) {
+          // Update if changed
+          const startTime = new Date(gEvent.start.dateTime);
+          const endTime = new Date(gEvent.end.dateTime);
+          const changed =
+            existing.title !== (gEvent.summary || "Busy") ||
+            existing.startTime.getTime() !== startTime.getTime() ||
+            existing.endTime.getTime() !== endTime.getTime() ||
+            existing.location !== (gEvent.location || null);
+
+          if (changed) {
+            await db
+              .update(calendarEvents)
+              .set({
+                title: gEvent.summary || "Busy",
+                startTime,
+                endTime,
+                location: gEvent.location || null,
+                description: gEvent.description || null,
+                updatedAt: new Date(),
+              })
+              .where(eq(calendarEvents.id, existing.id));
+          }
+        } else {
+          // Create new blocker event
+          const sourceLabel = calendarId === "primary" ? "personal" : "work";
+          await db.insert(calendarEvents).values({
+            title: gEvent.summary || "Busy",
+            description: gEvent.description || null,
+            startTime: new Date(gEvent.start.dateTime),
+            endTime: new Date(gEvent.end.dateTime),
+            location: gEvent.location || null,
+            source: "google_calendar",
+            googleEventId,
+            isBlocker: true,
+            color: "slate",
+            metadata: {
+              category: "other",
+              googleCalendar: true,
+              sourceCalendar: sourceLabel,
+            },
+          });
+          imported++;
+        }
+      }
+    } catch (err) {
+      console.error(`[gcal] Failed to pull events from ${calendarId}:`, err);
+    }
+  }
+
+  // Remove Joy blocker events that no longer exist in any source calendar
+  const joyBlockers = await db
+    .select()
+    .from(calendarEvents)
+    .where(
+      and(
+        eq(calendarEvents.source, "google_calendar"),
+        gte(calendarEvents.startTime, startDate),
+        lt(calendarEvents.startTime, endDate),
+        isNotNull(calendarEvents.googleEventId)
+      )
+    );
+
+  for (const blocker of joyBlockers) {
+    if (blocker.googleEventId && !allGoogleEventIds.includes(blocker.googleEventId)) {
+      await db
+        .delete(calendarEvents)
+        .where(eq(calendarEvents.id, blocker.id));
+    }
+  }
+
+  return imported;
 }
 
 /**
@@ -499,30 +683,44 @@ export async function fullSync(): Promise<{
   let pushed = 0;
   let pulled = 0;
 
-  // Lazy migration: create Joy calendar if not yet configured
-  const currentJoyId = await getJoyCalendarId();
-  if (currentJoyId === "primary") {
+  const config = await getGoogleConfig();
+  const hasDualCalendars = !!(config.joyWorkCalendarId && config.joyPersonalCalendarId);
+
+  // Lazy migration: create dual calendars if not yet configured
+  if (!hasDualCalendars) {
     try {
       const cal = await getCalendarClient();
       if (cal) {
-        const joyCalendarId = await createOrFindJoyCalendar(cal);
+        const { joyWorkCalendarId, joyPersonalCalendarId } =
+          await createOrFindJoyCalendars(cal);
         await db
           .update(integrationState)
           .set({
-            config: { joyCalendarId },
+            config: {
+              ...config,
+              joyWorkCalendarId,
+              joyPersonalCalendarId,
+            },
             updatedAt: new Date(),
           })
           .where(eq(integrationState.provider, "google"));
-        console.log("[gcal] Lazy migration: Joy calendar created:", joyCalendarId);
+        console.log(
+          "[gcal] Lazy migration: dual Joy calendars created — Work:",
+          joyWorkCalendarId,
+          "Personal:",
+          joyPersonalCalendarId
+        );
       }
     } catch (err) {
-      errors.push(`Joy calendar creation failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+      errors.push(
+        `Joy calendar creation failed: ${err instanceof Error ? err.message : "Unknown error"}`
+      );
     }
   }
 
   const now = new Date();
   const startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const endDate = new Date(startDate.getTime() + 8 * 24 * 60 * 60 * 1000); // 8 days ahead
+  const endDate = new Date(startDate.getTime() + 8 * 24 * 60 * 60 * 1000);
 
   // 1. Push Joy events that don't have a Google ID yet
   const unpushedEvents = await db
@@ -538,6 +736,10 @@ export async function fullSync(): Promise<{
 
   for (const event of unpushedEvents) {
     if (!event.googleEventId) {
+      const metadata = event.metadata as Record<string, unknown> | null;
+      const category = (metadata?.category as string) || "other";
+      const calendarType = (metadata?.calendarType as CalendarType) || getCategoryCalendarType(category);
+
       const gId = await pushEventToGoogle({
         id: event.id,
         title: event.title,
@@ -545,6 +747,7 @@ export async function fullSync(): Promise<{
         startTime: event.startTime,
         endTime: event.endTime,
         location: event.location,
+        calendarType,
       });
       if (gId) {
         pushed++;
@@ -568,23 +771,30 @@ export async function fullSync(): Promise<{
     );
 
   const cal = await getCalendarClient();
-  const joyCalendarId = await getJoyCalendarId();
+  const joyCalIds = await getJoyCalendarIds();
   if (cal) {
     for (const event of pushedEvents) {
-      try {
-        await cal.events.get({
-          calendarId: joyCalendarId,
-          eventId: event.googleEventId!,
-        });
-      } catch (err: unknown) {
-        const status = (err as { code?: number }).code;
-        if (status === 404 || status === 410) {
-          // Event was deleted from Google — remove locally
-          await db
-            .delete(calendarEvents)
-            .where(eq(calendarEvents.id, event.id));
-          console.log(`[gcal] Removed locally deleted event: ${event.title}`);
+      let found = false;
+      for (const calId of joyCalIds) {
+        try {
+          await cal.events.get({
+            calendarId: calId,
+            eventId: event.googleEventId!,
+          });
+          found = true;
+          break;
+        } catch (err: unknown) {
+          const status = (err as { code?: number }).code;
+          if (status === 404 || status === 410) continue;
+          found = true; // assume exists on API error
+          break;
         }
+      }
+      if (!found) {
+        await db
+          .delete(calendarEvents)
+          .where(eq(calendarEvents.id, event.id));
+        console.log(`[gcal] Removed locally deleted event: ${event.title}`);
       }
     }
   }
@@ -593,7 +803,9 @@ export async function fullSync(): Promise<{
   try {
     pulled = await pullExternalEvents(startDate, endDate);
   } catch (err) {
-    errors.push(`Pull failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+    errors.push(
+      `Pull failed: ${err instanceof Error ? err.message : "Unknown error"}`
+    );
   }
 
   // 4. Update last sync timestamp
