@@ -140,11 +140,11 @@ export function ChatView() {
         }),
       });
 
-      if (!res.ok) {
-        throw new Error("Chat request failed");
-      }
-
       const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.detail || "Chat request failed");
+      }
 
       setConversationId(data.conversationId);
 
@@ -161,12 +161,12 @@ export function ChatView() {
         };
         setMessages((prev) => [...prev, assistantMsg]);
       }
-    } catch {
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "Unknown error";
       const errorMsg: ChatMessage = {
         id: `err-${Date.now()}`,
         role: "assistant",
-        content:
-          "Sorry, I couldn't process that. Check that the API key is configured and try again.",
+        content: `Sorry, I couldn't process that: ${detail}`,
         createdAt: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, errorMsg]);
