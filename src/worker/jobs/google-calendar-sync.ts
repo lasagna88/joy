@@ -81,7 +81,7 @@ export async function runGoogleCalendarSync() {
   let pushed = 0;
   let pulled = 0;
 
-  // 1. Push unpushed Papwa events
+  // 1. Push unpushed Joy events
   const { calendarEvents } = schema;
   const unpushed = await db
     .select()
@@ -121,7 +121,7 @@ export async function runGoogleCalendarSync() {
           start: { dateTime: event.startTime.toISOString() },
           end: { dateTime: event.endTime.toISOString() },
           extendedProperties: {
-            private: { papwaEventId: event.id },
+            private: { joyEventId: event.id },
           },
         },
       });
@@ -152,7 +152,7 @@ export async function runGoogleCalendarSync() {
     const googleEvents = res.data.items || [];
 
     for (const gEvent of googleEvents) {
-      if (gEvent.extendedProperties?.private?.papwaEventId) continue;
+      if (gEvent.extendedProperties?.private?.joyEventId) continue;
       if (!gEvent.start?.dateTime || !gEvent.end?.dateTime) continue;
       if (gEvent.status === "cancelled") continue;
       if (!gEvent.id) continue;

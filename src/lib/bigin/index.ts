@@ -5,7 +5,7 @@ import { eq, and } from "drizzle-orm";
 const ZOHO_ACCOUNTS_URL = "https://accounts.zoho.com";
 const BIGIN_API_URL = "https://www.zohoapis.com/bigin/v2";
 
-// Map Bigin pipeline stages to Papwa task categories
+// Map Bigin pipeline stages to Joy task categories
 const STAGE_TO_CATEGORY: Record<string, string> = {
   // Common Bigin pipeline stages for solar sales
   "Qualification": "follow_up",
@@ -22,7 +22,7 @@ const STAGE_TO_CATEGORY: Record<string, string> = {
   "Design Review": "admin",
 };
 
-// Map Bigin pipeline stages to Papwa task priorities
+// Map Bigin pipeline stages to Joy task priorities
 const STAGE_TO_PRIORITY: Record<string, string> = {
   "Appointment Set": "high",
   "Appointment Scheduled": "high",
@@ -317,7 +317,7 @@ interface BiginContact {
 
 /**
  * Sync pipeline records (deals) from Bigin.
- * Maps deal stages to Papwa task categories and creates/updates tasks.
+ * Maps deal stages to Joy task categories and creates/updates tasks.
  */
 export async function syncDeals(): Promise<number> {
   let synced = 0;

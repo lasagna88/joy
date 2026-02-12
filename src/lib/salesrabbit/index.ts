@@ -4,7 +4,7 @@ import { eq, and } from "drizzle-orm";
 
 const SALESRABBIT_API_URL = "https://api.salesrabbit.com";
 
-// Map SalesRabbit lead/appointment statuses to Papwa categories
+// Map SalesRabbit lead/appointment statuses to Joy categories
 const STATUS_TO_CATEGORY: Record<string, string> = {
   "Appointment Set": "appointment",
   "Appointment Completed": "follow_up",
@@ -168,7 +168,7 @@ interface SalesRabbitLead {
 
 /**
  * Sync leads from SalesRabbit.
- * New leads become Papwa tasks. Leads with appointments create calendar events.
+ * New leads become Joy tasks. Leads with appointments create calendar events.
  * Returns count of new items and whether any new appointments were found.
  */
 export async function syncLeads(): Promise<{

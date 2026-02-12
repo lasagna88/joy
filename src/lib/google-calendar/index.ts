@@ -182,7 +182,7 @@ export async function disconnect() {
 }
 
 /**
- * Push a single Papwa event to Google Calendar. Returns the Google event ID.
+ * Push a single Joy event to Google Calendar. Returns the Google event ID.
  */
 export async function pushEventToGoogle(event: {
   id: string;
@@ -218,7 +218,7 @@ export async function pushEventToGoogle(event: {
         },
         extendedProperties: {
           private: {
-            papwaEventId: event.id,
+            joyEventId: event.id,
           },
         },
       },
@@ -317,8 +317,8 @@ export async function deleteGoogleEvent(
 }
 
 /**
- * Pull external events from Google Calendar and create blocker events in Papwa.
- * Only pulls events not created by Papwa (no papwaEventId in extended properties).
+ * Pull external events from Google Calendar and create blocker events in Joy.
+ * Only pulls events not created by Joy (no joyEventId in extended properties).
  */
 export async function pullExternalEvents(
   startDate: Date,
@@ -349,8 +349,8 @@ export async function pullExternalEvents(
     let imported = 0;
 
     for (const gEvent of googleEvents) {
-      // Skip events created by Papwa
-      if (gEvent.extendedProperties?.private?.papwaEventId) continue;
+      // Skip events created by Joy
+      if (gEvent.extendedProperties?.private?.joyEventId) continue;
 
       // Skip all-day events (no dateTime)
       if (!gEvent.start?.dateTime || !gEvent.end?.dateTime) continue;
@@ -411,12 +411,12 @@ export async function pullExternalEvents(
       }
     }
 
-    // Remove Papwa blocker events that no longer exist in Google Calendar
+    // Remove Joy blocker events that no longer exist in Google Calendar
     const googleEventIds = googleEvents
-      .filter((e) => e.id && !e.extendedProperties?.private?.papwaEventId)
+      .filter((e) => e.id && !e.extendedProperties?.private?.joyEventId)
       .map((e) => e.id!);
 
-    const papwaBlockers = await db
+    const joyBlockers = await db
       .select()
       .from(calendarEvents)
       .where(
@@ -428,7 +428,7 @@ export async function pullExternalEvents(
         )
       );
 
-    for (const blocker of papwaBlockers) {
+    for (const blocker of joyBlockers) {
       if (blocker.googleEventId && !googleEventIds.includes(blocker.googleEventId)) {
         await db
           .delete(calendarEvents)
@@ -444,7 +444,7 @@ export async function pullExternalEvents(
 }
 
 /**
- * Full sync: push all Papwa AI-planned events to Google, pull external events as blockers.
+ * Full sync: push all Joy AI-planned events to Google, pull external events as blockers.
  * Covers today + next 7 days.
  */
 export async function fullSync(): Promise<{
@@ -460,7 +460,7 @@ export async function fullSync(): Promise<{
   const startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const endDate = new Date(startDate.getTime() + 8 * 24 * 60 * 60 * 1000); // 8 days ahead
 
-  // 1. Push Papwa events that don't have a Google ID yet
+  // 1. Push Joy events that don't have a Google ID yet
   const unpushedEvents = await db
     .select()
     .from(calendarEvents)
