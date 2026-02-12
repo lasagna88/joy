@@ -34,7 +34,7 @@ export const AI_TOOLS: Anthropic.Tool[] = [
             "other",
           ],
           description:
-            "Task category. appointment = customer meetings, follow_up = callbacks/emails, door_knocking = canvassing blocks.",
+            "Task category. appointment = customer meetings, follow_up = callbacks/emails, door_knocking = canvassing blocks, personal = personal life items (exercise, errands, partner time, cleaning, etc).",
         },
         estimated_minutes: {
           type: "number",
@@ -128,7 +128,7 @@ export const AI_TOOLS: Anthropic.Tool[] = [
             "personal",
             "other",
           ],
-          description: "Filter by category",
+          description: "Filter by category (personal includes exercise, errands, partner_time, etc.)",
         },
         limit: {
           type: "number",
@@ -178,12 +178,17 @@ export const AI_TOOLS: Anthropic.Tool[] = [
             "admin",
             "goal_work",
             "personal",
+            "exercise",
+            "errands",
+            "partner_time",
+            "meal_prep",
+            "cleaning",
             "lunch",
             "travel",
             "buffer",
             "other",
           ],
-          description: "Category for color coding. Use 'lunch' for lunch breaks, 'travel' for travel buffers, 'buffer' for transition time.",
+          description: "Category for color coding. Use personal subtypes for specific personal activities: exercise, errands, partner_time, meal_prep, cleaning. Use 'lunch' for lunch breaks, 'travel' for travel buffers, 'buffer' for transition time.",
         },
         is_blocker: {
           type: "boolean",

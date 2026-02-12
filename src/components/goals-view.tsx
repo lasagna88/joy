@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 
 interface Goal {
   id: string;
@@ -11,6 +12,12 @@ interface Goal {
   color: string | null;
   isActive: boolean;
   createdAt: string;
+}
+
+interface GoalProgress {
+  id: string;
+  weeklyHoursTarget: number;
+  weeklyHoursActual: number;
 }
 
 const colorOptions = [
@@ -31,6 +38,7 @@ export function GoalsView() {
   const [formHours, setFormHours] = useState("5");
   const [formColor, setFormColor] = useState("cyan");
   const [saving, setSaving] = useState(false);
+  const [goalProgress, setGoalProgress] = useState<Record<string, GoalProgress>>({});
 
   async function fetchGoals() {
     try {
@@ -46,8 +54,25 @@ export function GoalsView() {
     }
   }
 
+  async function fetchProgress() {
+    try {
+      const res = await fetch("/api/analytics?period=week");
+      if (res.ok) {
+        const data = await res.json();
+        const progressMap: Record<string, GoalProgress> = {};
+        for (const gp of data.goalProgress || []) {
+          progressMap[gp.id] = gp;
+        }
+        setGoalProgress(progressMap);
+      }
+    } catch {
+      // Progress unavailable
+    }
+  }
+
   useEffect(() => {
     fetchGoals();
+    fetchProgress();
   }, []);
 
   async function createGoal() {
@@ -104,12 +129,20 @@ export function GoalsView() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Goals</h1>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 transition-colors hover:bg-zinc-700"
-        >
-          {showForm ? "Cancel" : "+ Add Goal"}
-        </button>
+        <div className="flex gap-2">
+          <Link
+            href="/analytics"
+            className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 transition-colors hover:bg-zinc-700"
+          >
+            Analytics
+          </Link>
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 transition-colors hover:bg-zinc-700"
+          >
+            {showForm ? "Cancel" : "+ Add"}
+          </button>
+        </div>
       </div>
 
       {/* New Goal Form */}
@@ -198,6 +231,11 @@ export function GoalsView() {
             const colorDot =
               colorOptions.find((c) => c.value === goal.color)?.class ||
               "bg-cyan-400";
+            const progress = goalProgress[goal.id];
+            const target = goal.weeklyHoursTarget || 0;
+            const actual = progress?.weeklyHoursActual || 0;
+            const pct = target > 0 ? Math.min((actual / target) * 100, 100) : 0;
+
             return (
               <div
                 key={goal.id}
@@ -236,24 +274,24 @@ export function GoalsView() {
                     </svg>
                   </button>
                 </div>
-                <div className="mt-3 flex items-center gap-4">
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="text-zinc-500">Weekly target</span>
-                      <span className="text-zinc-300 font-medium">
-                        {goal.weeklyHoursTarget}h / week
-                      </span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-zinc-800">
-                      <div
-                        className={`h-1.5 rounded-full ${colorDot} opacity-60`}
-                        style={{ width: "0%" }}
-                      />
-                    </div>
-                    <p className="text-[10px] text-zinc-600 mt-1">
-                      Progress tracking comes in Phase 1c
-                    </p>
+                <div className="mt-3">
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span className="text-zinc-500">This week</span>
+                    <span className="text-zinc-300 font-medium font-mono">
+                      {actual}h / {target}h
+                    </span>
                   </div>
+                  <div className="h-2 rounded-full bg-zinc-800">
+                    <div
+                      className={`h-2 rounded-full ${colorDot} transition-all`}
+                      style={{ width: `${pct}%`, opacity: 0.8 }}
+                    />
+                  </div>
+                  {pct >= 100 && (
+                    <p className="text-[10px] text-green-400 mt-0.5">
+                      Weekly target met!
+                    </p>
+                  )}
                 </div>
               </div>
             );
