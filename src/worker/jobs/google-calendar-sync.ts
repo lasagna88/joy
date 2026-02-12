@@ -71,8 +71,45 @@ export async function runGoogleCalendarSync() {
   }
 
   const cal = google.calendar({ version: "v3", auth: oauth2 });
-  const calendarId =
-    (state.config as Record<string, string>)?.calendarId || "primary";
+
+  // Joy calendar for pushing events, primary for pulling blockers
+  let joyCalendarId =
+    (state.config as Record<string, string>)?.joyCalendarId || "primary";
+
+  // Lazy migration: create Joy calendar if not yet configured
+  if (joyCalendarId === "primary") {
+    try {
+      const listRes = await cal.calendarList.list();
+      const existing = listRes.data.items?.find(
+        (c) => c.summary === "Joy" && c.accessRole === "owner"
+      );
+      if (existing?.id) {
+        joyCalendarId = existing.id;
+      } else {
+        const createRes = await cal.calendars.insert({
+          requestBody: {
+            summary: "Joy",
+            description: "Events planned by Joy AI",
+          },
+        });
+        joyCalendarId = createRes.data.id!;
+        await cal.calendarList.update({
+          calendarId: joyCalendarId,
+          requestBody: { colorId: "7" },
+        });
+      }
+      await db
+        .update(schema.integrationState)
+        .set({
+          config: { joyCalendarId },
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.integrationState.provider, "google"));
+      console.log("[gcal-sync] Joy calendar ready:", joyCalendarId);
+    } catch (err) {
+      console.error("[gcal-sync] Failed to create Joy calendar:", err);
+    }
+  }
 
   const now = new Date();
   const startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -81,19 +118,8 @@ export async function runGoogleCalendarSync() {
   let pushed = 0;
   let pulled = 0;
 
-  // 1. Push unpushed Joy events
+  // 1. Push unpushed Joy events to the Joy calendar
   const { calendarEvents } = schema;
-  const unpushed = await db
-    .select()
-    .from(calendarEvents)
-    .where(
-      and(
-        eq(calendarEvents.source, "ai_planned"),
-        eq(calendarEvents.googleEventId, ""),
-      )
-    );
-
-  // Also get events with null googleEventId
   const unpushedNull = await db
     .select()
     .from(calendarEvents)
@@ -113,7 +139,7 @@ export async function runGoogleCalendarSync() {
   for (const event of toPush) {
     try {
       const res = await cal.events.insert({
-        calendarId,
+        calendarId: joyCalendarId,
         requestBody: {
           summary: event.title,
           description: event.description || undefined,
@@ -138,10 +164,10 @@ export async function runGoogleCalendarSync() {
     }
   }
 
-  // 2. Pull external events as blockers
+  // 2. Pull external events as blockers from primary calendar
   try {
     const res = await cal.events.list({
-      calendarId,
+      calendarId: "primary",
       timeMin: startDate.toISOString(),
       timeMax: endDate.toISOString(),
       singleEvents: true,

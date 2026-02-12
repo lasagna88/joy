@@ -14,6 +14,52 @@ function getOAuth2Client() {
 }
 
 /**
+ * Read the Joy calendar ID from integration config, falling back to "primary"
+ */
+async function getJoyCalendarId(): Promise<string> {
+  const [state] = await db
+    .select()
+    .from(integrationState)
+    .where(eq(integrationState.provider, "google"));
+
+  return (state?.config as Record<string, string>)?.joyCalendarId || "primary";
+}
+
+/**
+ * Find an existing "Joy" secondary calendar or create one.
+ * Returns the calendar ID (e.g. abc123@group.calendar.google.com).
+ */
+async function createOrFindJoyCalendar(
+  cal: calendar_v3.Calendar
+): Promise<string> {
+  // Search existing calendars
+  const listRes = await cal.calendarList.list();
+  const existing = listRes.data.items?.find(
+    (c) => c.summary === "Joy" && c.accessRole === "owner"
+  );
+  if (existing?.id) return existing.id;
+
+  // Create a new secondary calendar
+  const createRes = await cal.calendars.insert({
+    requestBody: {
+      summary: "Joy",
+      description: "Events planned by Joy AI",
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    },
+  });
+
+  const newId = createRes.data.id!;
+
+  // Set calendar color (blue — colorId "7" in Google Calendar)
+  await cal.calendarList.update({
+    calendarId: newId,
+    requestBody: { colorId: "7" },
+  });
+
+  return newId;
+}
+
+/**
  * Generate the Google OAuth consent URL
  */
 export function getAuthUrl(): string {
@@ -42,7 +88,7 @@ export async function exchangeCodeForTokens(code: string) {
         ? new Date(tokens.expiry_date)
         : null,
       isActive: true,
-      config: { calendarId: "primary" },
+      config: {},
       lastSyncAt: null,
     })
     .onConflictDoUpdate({
@@ -54,10 +100,30 @@ export async function exchangeCodeForTokens(code: string) {
           ? new Date(tokens.expiry_date)
           : null,
         isActive: true,
-        config: { calendarId: "primary" },
         updatedAt: new Date(),
       },
     });
+
+  // Create or find the dedicated "Joy" calendar
+  try {
+    const oauth2 = getOAuth2Client();
+    oauth2.setCredentials(tokens);
+    const cal = google.calendar({ version: "v3", auth: oauth2 });
+    const joyCalendarId = await createOrFindJoyCalendar(cal);
+
+    await db
+      .update(integrationState)
+      .set({
+        config: { joyCalendarId },
+        updatedAt: new Date(),
+      })
+      .where(eq(integrationState.provider, "google"));
+
+    console.log("[gcal] Joy calendar ready:", joyCalendarId);
+  } catch (err) {
+    console.error("[gcal] Failed to create Joy calendar:", err);
+    // Non-fatal — fullSync will retry via lazy migration
+  }
 
   return tokens;
 }
@@ -195,13 +261,7 @@ export async function pushEventToGoogle(event: {
   const cal = await getCalendarClient();
   if (!cal) return null;
 
-  const [state] = await db
-    .select()
-    .from(integrationState)
-    .where(eq(integrationState.provider, "google"));
-
-  const calendarId =
-    (state?.config as Record<string, string>)?.calendarId || "primary";
+  const calendarId = await getJoyCalendarId();
 
   try {
     const res = await cal.events.insert({
@@ -256,13 +316,7 @@ export async function updateGoogleEvent(event: {
   const cal = await getCalendarClient();
   if (!cal) return false;
 
-  const [state] = await db
-    .select()
-    .from(integrationState)
-    .where(eq(integrationState.provider, "google"));
-
-  const calendarId =
-    (state?.config as Record<string, string>)?.calendarId || "primary";
+  const calendarId = await getJoyCalendarId();
 
   try {
     await cal.events.update({
@@ -296,13 +350,7 @@ export async function deleteGoogleEvent(
   const cal = await getCalendarClient();
   if (!cal) return false;
 
-  const [state] = await db
-    .select()
-    .from(integrationState)
-    .where(eq(integrationState.provider, "google"));
-
-  const calendarId =
-    (state?.config as Record<string, string>)?.calendarId || "primary";
+  const calendarId = await getJoyCalendarId();
 
   try {
     await cal.events.delete({
@@ -327,13 +375,8 @@ export async function pullExternalEvents(
   const cal = await getCalendarClient();
   if (!cal) return 0;
 
-  const [state] = await db
-    .select()
-    .from(integrationState)
-    .where(eq(integrationState.provider, "google"));
-
-  const calendarId =
-    (state?.config as Record<string, string>)?.calendarId || "primary";
+  // Always pull blockers from the user's primary calendar
+  const calendarId = "primary";
 
   try {
     const res = await cal.events.list({
@@ -455,6 +498,27 @@ export async function fullSync(): Promise<{
   const errors: string[] = [];
   let pushed = 0;
   let pulled = 0;
+
+  // Lazy migration: create Joy calendar if not yet configured
+  const currentJoyId = await getJoyCalendarId();
+  if (currentJoyId === "primary") {
+    try {
+      const cal = await getCalendarClient();
+      if (cal) {
+        const joyCalendarId = await createOrFindJoyCalendar(cal);
+        await db
+          .update(integrationState)
+          .set({
+            config: { joyCalendarId },
+            updatedAt: new Date(),
+          })
+          .where(eq(integrationState.provider, "google"));
+        console.log("[gcal] Lazy migration: Joy calendar created:", joyCalendarId);
+      }
+    } catch (err) {
+      errors.push(`Joy calendar creation failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+  }
 
   const now = new Date();
   const startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { calendarEvents } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+import { updateGoogleEvent, deleteGoogleEvent } from "@/lib/google-calendar";
 
 export async function PATCH(
   request: NextRequest,
@@ -30,6 +31,19 @@ export async function PATCH(
       return NextResponse.json({ error: "Event not found" }, { status: 404 });
     }
 
+    // Sync update to Google Calendar if the event has been pushed
+    if (event.googleEventId && event.source === "ai_planned") {
+      updateGoogleEvent({
+        id: event.id,
+        googleEventId: event.googleEventId,
+        title: event.title,
+        description: event.description,
+        startTime: event.startTime,
+        endTime: event.endTime,
+        location: event.location,
+      }).catch((err) => console.error("[api] Google Calendar update failed:", err));
+    }
+
     return NextResponse.json({ event });
   } catch (error) {
     console.error("Failed to update event:", error);
@@ -54,6 +68,13 @@ export async function DELETE(
 
     if (!event) {
       return NextResponse.json({ error: "Event not found" }, { status: 404 });
+    }
+
+    // Delete from Google Calendar if it was a Joy-created event (not a blocker)
+    if (event.googleEventId && event.source === "ai_planned") {
+      deleteGoogleEvent(event.googleEventId).catch((err) =>
+        console.error("[api] Google Calendar delete failed:", err)
+      );
     }
 
     return NextResponse.json({ success: true });
