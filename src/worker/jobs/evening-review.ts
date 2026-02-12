@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { AI_TOOLS } from "../../lib/ai/tools";
 import { handleToolCall } from "../../lib/ai/tool-handlers";
-import { SYSTEM_PROMPT } from "../../lib/ai";
+import { getSystemPrompt } from "../../lib/ai";
 import { sendPushNotification } from "../../lib/notifications";
 
 const MAX_ROUNDS = 8;
@@ -38,7 +38,7 @@ Keep it brief and motivating.`;
     const response = await claude.messages.create({
       model: "claude-sonnet-4-5-20250929",
       max_tokens: 2048,
-      system: SYSTEM_PROMPT,
+      system: getSystemPrompt(),
       tools: AI_TOOLS,
       messages,
     });

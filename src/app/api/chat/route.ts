@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAnthropicClient, SYSTEM_PROMPT } from "@/lib/ai";
+import { getAnthropicClient, getSystemPrompt } from "@/lib/ai";
 import { AI_TOOLS } from "@/lib/ai/tools";
 import { handleToolCall } from "@/lib/ai/tool-handlers";
 import { db } from "@/lib/db";
@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
       const response = await claude.messages.create({
         model: "claude-sonnet-4-5-20250929",
         max_tokens: 1024,
-        system: SYSTEM_PROMPT,
+        system: getSystemPrompt(),
         tools: AI_TOOLS,
         messages: currentMessages,
       });
