@@ -554,14 +554,49 @@ export async function fullSync(): Promise<{
     }
   }
 
-  // 2. Pull external events as blockers
+  // 2. Clean up Joy events that were deleted from Google Calendar
+  const pushedEvents = await db
+    .select()
+    .from(calendarEvents)
+    .where(
+      and(
+        eq(calendarEvents.source, "ai_planned"),
+        isNotNull(calendarEvents.googleEventId),
+        gte(calendarEvents.startTime, startDate),
+        lt(calendarEvents.startTime, endDate)
+      )
+    );
+
+  const cal = await getCalendarClient();
+  const joyCalendarId = await getJoyCalendarId();
+  if (cal) {
+    for (const event of pushedEvents) {
+      try {
+        await cal.events.get({
+          calendarId: joyCalendarId,
+          eventId: event.googleEventId!,
+        });
+      } catch (err: unknown) {
+        const status = (err as { code?: number }).code;
+        if (status === 404 || status === 410) {
+          // Event was deleted from Google — remove locally
+          await db
+            .delete(calendarEvents)
+            .where(eq(calendarEvents.id, event.id));
+          console.log(`[gcal] Removed locally deleted event: ${event.title}`);
+        }
+      }
+    }
+  }
+
+  // 3. Pull external events as blockers
   try {
     pulled = await pullExternalEvents(startDate, endDate);
   } catch (err) {
     errors.push(`Pull failed: ${err instanceof Error ? err.message : "Unknown error"}`);
   }
 
-  // 3. Update last sync timestamp
+  // 4. Update last sync timestamp
   await db
     .update(integrationState)
     .set({ lastSyncAt: new Date(), updatedAt: new Date() })
