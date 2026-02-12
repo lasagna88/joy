@@ -31,7 +31,7 @@ const STATUS_TO_PRIORITY: Record<string, string> = {
 export async function connect(apiToken: string): Promise<boolean> {
   // Verify the token works by making a test request
   try {
-    const res = await fetch(`${SALESRABBIT_API_URL}/users/me`, {
+    const res = await fetch(`${SALESRABBIT_API_URL}/users?limit=1`, {
       headers: {
         Authorization: `Bearer ${apiToken}`,
         Accept: "application/json",
@@ -39,6 +39,7 @@ export async function connect(apiToken: string): Promise<boolean> {
     });
 
     if (!res.ok) {
+      console.error("[salesrabbit] Auth test failed:", res.status, await res.text().catch(() => ""));
       return false;
     }
 
