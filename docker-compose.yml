@@ -29,6 +29,17 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    build:
+      context: .
+      target: migrate
+    environment:
+      DATABASE_URL: postgres://papwa:papwa_secret@db:5432/papwa
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   app:
     build:
       context: .
@@ -45,6 +56,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   worker:
     build:
@@ -60,6 +73,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   caddy:
     image: caddy:2-alpine

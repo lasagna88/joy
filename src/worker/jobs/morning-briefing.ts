@@ -1,11 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { db } from "@/lib/db";
-import { tasks, calendarEvents } from "@/lib/db/schema";
+import { db } from "../../lib/db";
+import { tasks, calendarEvents } from "../../lib/db/schema";
 import { and, eq, ne, gte, lt } from "drizzle-orm";
-import { AI_TOOLS } from "@/lib/ai/tools";
-import { handleToolCall } from "@/lib/ai/tool-handlers";
-import { SYSTEM_PROMPT } from "@/lib/ai";
-import { sendPushNotification } from "@/lib/notifications";
+import { AI_TOOLS } from "../../lib/ai/tools";
+import { handleToolCall } from "../../lib/ai/tool-handlers";
+import { SYSTEM_PROMPT } from "../../lib/ai";
+import { sendPushNotification } from "../../lib/notifications";
 
 const MAX_ROUNDS = 10;
 

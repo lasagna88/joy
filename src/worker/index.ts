@@ -7,7 +7,7 @@ import { runWeeklyPlan } from "./jobs/weekly-plan";
 import { runGoogleCalendarSync } from "./jobs/google-calendar-sync";
 import { runBiginSync } from "./jobs/bigin-sync";
 import { runSalesRabbitSync } from "./jobs/salesrabbit-sync";
-import { sendPushNotification } from "@/lib/notifications";
+import { sendPushNotification } from "../lib/notifications";
 
 const connection = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {
   maxRetriesPerRequest: null,
