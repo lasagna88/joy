@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
       const hashed = await hashPassphrase(configuredPassphrase);
       await db.insert(userPreferences).values({
         key: "passphrase_hash",
-        value: JSON.stringify(hashed),
+        value: hashed,
       });
 
       // Check against configured passphrase
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
       }
     } else {
       // Verify against stored hash
-      const storedHash = JSON.parse(stored[0].value as string) as string;
+      const storedHash = stored[0].value as string;
       const valid = await compare(passphrase, storedHash);
       if (!valid) {
         return NextResponse.json(
