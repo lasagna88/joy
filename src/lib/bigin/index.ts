@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { integrationState, tasks } from "@/lib/db/schema";
+import { integrationState, tasks, calendarEvents } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 
 // Zoho uses different domains per data center:
@@ -118,6 +118,28 @@ export async function exchangeCodeForTokens(
     Date.now() + ((data.expires_in as number) || 3600) * 1000
   );
 
+  // Discover the current user ID for owner-filtered syncs
+  let userId: string | undefined;
+  try {
+    const apiBase = `${process.env.ZOHO_API_URL || "https://www.zohoapis.com"}/bigin/v2`;
+    const userRes = await fetch(`${apiBase}/users?type=CurrentUser`, {
+      headers: {
+        Authorization: `Zoho-oauthtoken ${data.access_token}`,
+      },
+    });
+    if (userRes.ok) {
+      const userData = await userRes.json();
+      const users = userData.users || [];
+      if (users.length > 0) {
+        userId = String(users[0].id);
+        console.log("[bigin] Current user ID:", userId, users[0].full_name);
+      }
+    }
+  } catch {
+    // Non-fatal — sync will work without owner filtering
+    console.warn("[bigin] Could not fetch current user for owner filtering");
+  }
+
   await db
     .insert(integrationState)
     .values({
@@ -126,7 +148,7 @@ export async function exchangeCodeForTokens(
       refreshToken: (data.refresh_token as string) || null,
       tokenExpiresAt: expiresAt,
       isActive: true,
-      config: { stageMapping: STAGE_TO_CATEGORY, accountsUrl },
+      config: { stageMapping: STAGE_TO_CATEGORY, accountsUrl, userId },
       lastSyncAt: null,
     })
     .onConflictDoUpdate({
@@ -136,7 +158,7 @@ export async function exchangeCodeForTokens(
         refreshToken: (data.refresh_token as string) || undefined,
         tokenExpiresAt: expiresAt,
         isActive: true,
-        config: { stageMapping: STAGE_TO_CATEGORY, accountsUrl },
+        config: { stageMapping: STAGE_TO_CATEGORY, accountsUrl, userId },
         updatedAt: new Date(),
       },
     });
@@ -340,6 +362,7 @@ interface BiginDeal {
   Description?: string;
   Modified_Time?: string;
   Address?: string;
+  Owner?: { id: string; name: string } | null;
 }
 
 interface BiginTask {
@@ -351,6 +374,7 @@ interface BiginTask {
   Description?: string;
   What_Id?: { name: string; id: string } | null;
   Modified_Time?: string;
+  Owner?: { id: string; name: string } | null;
 }
 
 interface BiginContact {
@@ -380,7 +404,11 @@ export async function syncDeals(): Promise<number> {
       .from(integrationState)
       .where(eq(integrationState.provider, "bigin"));
 
-    let endpoint = "/Deals?fields=Deal_Name,Stage,Contact_Name,Phone,Email,Amount,Closing_Date,Description,Modified_Time,Address&per_page=100";
+    // Get stored user ID for owner filtering
+    const config = (state?.config as Record<string, string>) || {};
+    const userId = config.userId;
+
+    let endpoint = "/Deals?fields=Deal_Name,Stage,Contact_Name,Phone,Email,Amount,Closing_Date,Description,Modified_Time,Address,Owner&per_page=100";
 
     if (state?.syncCursor) {
       endpoint += `&modified_since=${state.syncCursor}`;
@@ -399,6 +427,11 @@ export async function syncDeals(): Promise<number> {
     const deals: BiginDeal[] = data.data || [];
 
     for (const deal of deals) {
+      // Skip deals not owned by the current user
+      if (userId && deal.Owner?.id && String(deal.Owner.id) !== userId) {
+        continue;
+      }
+
       const category = STAGE_TO_CATEGORY[deal.Stage] || "other";
       const priority = STAGE_TO_PRIORITY[deal.Stage] || "medium";
       const contactName = deal.Contact_Name?.name || undefined;
@@ -482,8 +515,16 @@ export async function syncBiginTasks(): Promise<number> {
   let synced = 0;
 
   try {
+    // Get stored user ID for owner filtering
+    const [state] = await db
+      .select()
+      .from(integrationState)
+      .where(eq(integrationState.provider, "bigin"));
+    const config = (state?.config as Record<string, string>) || {};
+    const userId = config.userId;
+
     const res = await biginFetch(
-      "/Tasks?fields=Subject,Status,Priority,Due_Date,Description,What_Id,Modified_Time&per_page=100"
+      "/Tasks?fields=Subject,Status,Priority,Due_Date,Description,What_Id,Modified_Time,Owner&per_page=100"
     );
 
     if (!res.ok) {
@@ -497,6 +538,11 @@ export async function syncBiginTasks(): Promise<number> {
     for (const bt of biginTasks) {
       // Skip completed Bigin tasks
       if (bt.Status === "Completed") continue;
+
+      // Skip tasks not owned by the current user
+      if (userId && bt.Owner?.id && String(bt.Owner.id) !== userId) {
+        continue;
+      }
 
       const externalId = `task_${bt.id}`;
 
@@ -617,6 +663,30 @@ export async function syncContacts(): Promise<number> {
 }
 
 /**
+ * Wipe all Bigin-sourced tasks and events, reset sync cursor.
+ * Used when reconfiguring owner filtering.
+ */
+export async function wipeAndReset(): Promise<number> {
+  const deleted = await db
+    .delete(tasks)
+    .where(eq(tasks.externalSource, "bigin"))
+    .returning();
+
+  const deletedEvents = await db
+    .delete(calendarEvents)
+    .where(eq(calendarEvents.source, "bigin"))
+    .returning();
+
+  await db
+    .update(integrationState)
+    .set({ syncCursor: null, updatedAt: new Date() })
+    .where(eq(integrationState.provider, "bigin"));
+
+  console.log(`[bigin] Wiped ${deleted.length} tasks, ${deletedEvents.length} events`);
+  return deleted.length + deletedEvents.length;
+}
+
+/**
  * Full Bigin sync: deals + tasks + contacts
  */
 export async function fullSync(): Promise<{
@@ -668,6 +738,147 @@ export async function fullSync(): Promise<{
     contacts: contactCount,
     errors,
   };
+}
+
+/**
+ * Discover custom fields available on the Deals module.
+ * Returns a map of field api_name → field label.
+ */
+export async function discoverDealFields(): Promise<
+  Record<string, { label: string; type: string }>
+> {
+  const res = await biginFetch("/settings/fields?module=Deals");
+  if (!res.ok) {
+    console.error("[bigin] Failed to discover deal fields:", res.status);
+    return {};
+  }
+
+  const data = await res.json();
+  const fields: Record<string, { label: string; type: string }> = {};
+  for (const f of data.fields || []) {
+    fields[f.api_name] = { label: f.field_label, type: f.data_type };
+  }
+  return fields;
+}
+
+/**
+ * Create a deal in Bigin from a SalesRabbit callback lead.
+ * Maps standard fields directly, discovers custom fields for solar data,
+ * and appends unmapped solar fields to the description.
+ */
+export async function createDeal(leadData: {
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  notes?: string;
+  customFields?: Record<string, string>;
+}): Promise<{ id: string } | null> {
+  const contactName = [leadData.firstName, leadData.lastName]
+    .filter(Boolean)
+    .join(" ");
+  const fullAddress = [leadData.address, leadData.city, leadData.state, leadData.zip]
+    .filter(Boolean)
+    .join(", ");
+
+  // Build the deal record
+  const dealRecord: Record<string, unknown> = {
+    Deal_Name: `${contactName || "Lead"} - Solar Proposal`,
+    Stage: "Qualification",
+  };
+
+  if (leadData.phone) dealRecord.Phone = leadData.phone;
+  if (leadData.email) dealRecord.Email = leadData.email;
+  if (fullAddress) dealRecord.Address = fullAddress;
+
+  // Process custom fields from SalesRabbit
+  const solarDetails: Record<string, string> = {};
+  const solarFieldKeys = [
+    "roof type", "meter", "main breaker", "property type", "need", "country",
+  ];
+
+  let biginCustomFields: Record<string, { label: string; type: string }> = {};
+  if (leadData.customFields && Object.keys(leadData.customFields).length > 0) {
+    biginCustomFields = await discoverDealFields();
+  }
+
+  if (leadData.customFields) {
+    for (const [key, value] of Object.entries(leadData.customFields)) {
+      if (!value) continue;
+
+      const keyLower = key.toLowerCase();
+
+      // Check for budget → Amount
+      if (keyLower === "budget" && !isNaN(Number(value))) {
+        dealRecord.Amount = Number(value);
+        continue;
+      }
+
+      // Check for timeline → Closing_Date
+      if (keyLower === "timeline" && !isNaN(Date.parse(value))) {
+        dealRecord.Closing_Date = value;
+        continue;
+      }
+
+      // Check if this is a solar-specific field
+      const isSolarField = solarFieldKeys.some((sf) => keyLower.includes(sf));
+
+      if (isSolarField) {
+        // Try to find a matching Bigin custom field
+        const matchingBiginField = Object.entries(biginCustomFields).find(
+          ([, meta]) => meta.label.toLowerCase().includes(keyLower)
+        );
+        if (matchingBiginField) {
+          dealRecord[matchingBiginField[0]] = value;
+        } else {
+          solarDetails[key] = value;
+        }
+      }
+    }
+  }
+
+  // Build description with notes + unmapped solar details
+  let description = leadData.notes || "";
+  if (Object.keys(solarDetails).length > 0) {
+    description += "\n\n--- Solar Details ---";
+    for (const [key, value] of Object.entries(solarDetails)) {
+      description += `\n${key}: ${value}`;
+    }
+  }
+  if (description) dealRecord.Description = description;
+
+  try {
+    const res = await biginFetch("/Deals", {
+      method: "POST",
+      body: JSON.stringify({ data: [dealRecord] }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("[bigin] Create deal failed:", res.status, text);
+      return null;
+    }
+
+    const data = await res.json();
+    const created = data.data?.[0];
+    if (created?.details?.id) {
+      console.log("[bigin] Deal created:", created.details.id);
+      return { id: created.details.id };
+    }
+    if (created?.code === "SUCCESS" && created?.details?.id) {
+      return { id: created.details.id };
+    }
+
+    console.error("[bigin] Unexpected create deal response:", JSON.stringify(data));
+    return null;
+  } catch (err) {
+    console.error("[bigin] Create deal error:", err);
+    return null;
+  }
 }
 
 /**

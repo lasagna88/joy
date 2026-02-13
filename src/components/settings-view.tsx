@@ -15,6 +15,7 @@ interface Prefs {
   min_slack_minutes: number;
   door_knocking_start: string;
   door_knocking_end: string;
+  proposal_prep_minutes: number;
 }
 
 function TimeInput({
@@ -93,6 +94,12 @@ export function SettingsView() {
   const [srMessage, setSrMessage] = useState<string | null>(null);
   const [srSyncing, setSrSyncing] = useState(false);
   const [srToken, setSrToken] = useState("");
+  const [callbackEnabled, setCallbackEnabled] = useState(false);
+  const [callbackStatusMatch, setCallbackStatusMatch] = useState("Callback");
+  const [callbackFieldName, setCallbackFieldName] = useState("");
+  const [callbackFieldValue, setCallbackFieldValue] = useState("");
+  const [callbackPrepMinutes, setCallbackPrepMinutes] = useState(90);
+  const [callbackSaving, setCallbackSaving] = useState(false);
   const searchParams = useSearchParams();
 
   const loadGcalStatus = useCallback(async () => {
@@ -128,6 +135,13 @@ export function SettingsView() {
       if (res.ok) {
         const data = await res.json();
         setSrStatus(data);
+        if (data.callbackConfig) {
+          setCallbackEnabled(data.callbackConfig.enabled ?? false);
+          setCallbackStatusMatch(data.callbackConfig.statusNameMatch ?? "Callback");
+          setCallbackFieldName(data.callbackConfig.customFieldName ?? "");
+          setCallbackFieldValue(data.callbackConfig.customFieldValue ?? "");
+          setCallbackPrepMinutes(data.callbackConfig.proposalPrepMinutes ?? 90);
+        }
       }
     } catch {
       setSrStatus({ connected: false });
@@ -321,16 +335,18 @@ export function SettingsView() {
     }
   }
 
-  async function syncBigin() {
+  async function syncBigin(wipe = false) {
     setBiginSyncing(true);
     try {
-      const res = await fetch("/api/integrations/bigin/sync", {
-        method: "POST",
-      });
+      const url = wipe
+        ? "/api/integrations/bigin/sync?wipe=true"
+        : "/api/integrations/bigin/sync";
+      const res = await fetch(url, { method: "POST" });
       if (res.ok) {
         const data = await res.json();
+        const prefix = wipe ? `Wiped ${data.wiped} old items. ` : "";
         setBiginMessage(
-          `Sync complete: ${data.deals} deals, ${data.tasks} tasks imported`
+          `${prefix}Sync complete: ${data.deals} deals, ${data.tasks} tasks imported`
         );
         loadBiginStatus();
       } else {
@@ -340,7 +356,7 @@ export function SettingsView() {
       setBiginMessage("Sync error.");
     } finally {
       setBiginSyncing(false);
-      setTimeout(() => setBiginMessage(null), 4000);
+      setTimeout(() => setBiginMessage(null), 6000);
     }
   }
 
@@ -392,16 +408,18 @@ export function SettingsView() {
     }
   }
 
-  async function syncSalesRabbit() {
+  async function syncSalesRabbit(wipe = false) {
     setSrSyncing(true);
     try {
-      const res = await fetch("/api/integrations/salesrabbit/sync", {
-        method: "POST",
-      });
+      const url = wipe
+        ? "/api/integrations/salesrabbit/sync?wipe=true"
+        : "/api/integrations/salesrabbit/sync";
+      const res = await fetch(url, { method: "POST" });
       if (res.ok) {
         const data = await res.json();
+        const prefix = wipe ? `Wiped ${data.wiped} old items. ` : "";
         setSrMessage(
-          `Sync complete: ${data.newTasks} leads, ${data.newAppointments} appointments`
+          `${prefix}Sync complete: ${data.newTasks} leads, ${data.newAppointments} appointments`
         );
         loadSrStatus();
       } else {
@@ -411,6 +429,35 @@ export function SettingsView() {
       setSrMessage("Sync error.");
     } finally {
       setSrSyncing(false);
+      setTimeout(() => setSrMessage(null), 6000);
+    }
+  }
+
+  async function saveCallbackConfig() {
+    setCallbackSaving(true);
+    try {
+      const res = await fetch("/api/integrations/salesrabbit", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          callbackConfig: {
+            enabled: callbackEnabled,
+            statusNameMatch: callbackStatusMatch,
+            customFieldName: callbackFieldName,
+            customFieldValue: callbackFieldValue,
+            proposalPrepMinutes: callbackPrepMinutes,
+          },
+        }),
+      });
+      if (res.ok) {
+        setSrMessage("Callback workflow config saved.");
+      } else {
+        setSrMessage("Failed to save callback config.");
+      }
+    } catch {
+      setSrMessage("Failed to save callback config.");
+    } finally {
+      setCallbackSaving(false);
       setTimeout(() => setSrMessage(null), 4000);
     }
   }
@@ -674,11 +721,18 @@ export function SettingsView() {
 
             <div className="flex gap-2">
               <button
-                onClick={syncBigin}
+                onClick={() => syncBigin()}
                 disabled={biginSyncing}
                 className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-300 transition-colors hover:bg-zinc-700 disabled:opacity-50"
               >
                 {biginSyncing ? "Syncing..." : "Sync Now"}
+              </button>
+              <button
+                onClick={() => syncBigin(true)}
+                disabled={biginSyncing}
+                className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-sm text-orange-400 transition-colors hover:bg-orange-500/20 disabled:opacity-50"
+              >
+                {biginSyncing ? "..." : "Wipe & Re-sync"}
               </button>
               <button
                 onClick={disconnectBigin}
@@ -690,8 +744,9 @@ export function SettingsView() {
             </div>
 
             <p className="text-xs text-zinc-600">
-              Auto-syncs every 15 minutes. Deals and tasks from Bigin appear in
-              your Joy inbox for scheduling.
+              Auto-syncs every 15 minutes. Only your deals and tasks are
+              imported. Use &ldquo;Wipe &amp; Re-sync&rdquo; to clear old data
+              and re-import with owner filtering.
             </p>
           </div>
         ) : (
@@ -753,11 +808,18 @@ export function SettingsView() {
 
             <div className="flex gap-2">
               <button
-                onClick={syncSalesRabbit}
+                onClick={() => syncSalesRabbit()}
                 disabled={srSyncing}
                 className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-300 transition-colors hover:bg-zinc-700 disabled:opacity-50"
               >
                 {srSyncing ? "Syncing..." : "Sync Now"}
+              </button>
+              <button
+                onClick={() => syncSalesRabbit(true)}
+                disabled={srSyncing}
+                className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-sm text-orange-400 transition-colors hover:bg-orange-500/20 disabled:opacity-50"
+              >
+                {srSyncing ? "..." : "Wipe & Re-sync"}
               </button>
               <button
                 onClick={disconnectSalesRabbit}
@@ -769,9 +831,111 @@ export function SettingsView() {
             </div>
 
             <p className="text-xs text-zinc-600">
-              Auto-syncs every 15 minutes. New appointments trigger an AI
-              replan to adjust your schedule.
+              Auto-syncs every 15 minutes. Only your leads are imported. Use
+              &ldquo;Wipe &amp; Re-sync&rdquo; to clear old data and re-import
+              with owner filtering.
             </p>
+
+            {/* Callback Workflow Config */}
+            <div className="border-t border-zinc-800 pt-3 mt-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-zinc-400 font-medium">
+                  Callback Workflow
+                </label>
+                <button
+                  onClick={() => {
+                    setCallbackEnabled(!callbackEnabled);
+                  }}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    callbackEnabled ? "bg-teal-600" : "bg-zinc-700"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                      callbackEnabled ? "translate-x-6" : "translate-x-1"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <p className="text-[11px] text-zinc-600">
+                When a lead is flagged as &ldquo;Callback&rdquo;, automatically
+                create a Bigin deal, prep task, and schedule proposal time before
+                the appointment.
+              </p>
+
+              {callbackEnabled && (
+                <div className="space-y-2">
+                  <div>
+                    <label className="text-[11px] text-zinc-500 block mb-1">
+                      Trigger status name
+                    </label>
+                    <input
+                      type="text"
+                      value={callbackStatusMatch}
+                      onChange={(e) => setCallbackStatusMatch(e.target.value)}
+                      placeholder="Callback"
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-white placeholder-zinc-600 focus:border-teal-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] text-zinc-500 block mb-1">
+                      Or custom field name (optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={callbackFieldName}
+                      onChange={(e) => setCallbackFieldName(e.target.value)}
+                      placeholder="e.g. callback_requested"
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-white placeholder-zinc-600 focus:border-teal-500 focus:outline-none"
+                    />
+                  </div>
+
+                  {callbackFieldName && (
+                    <div>
+                      <label className="text-[11px] text-zinc-500 block mb-1">
+                        Custom field value (blank = any truthy value)
+                      </label>
+                      <input
+                        type="text"
+                        value={callbackFieldValue}
+                        onChange={(e) => setCallbackFieldValue(e.target.value)}
+                        placeholder="e.g. yes"
+                        className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-white placeholder-zinc-600 focus:border-teal-500 focus:outline-none"
+                      />
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="text-[11px] text-zinc-500 block mb-1">
+                      Proposal prep time
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        value={callbackPrepMinutes}
+                        onChange={(e) =>
+                          setCallbackPrepMinutes(parseInt(e.target.value) || 90)
+                        }
+                        min={15}
+                        max={480}
+                        className="w-20 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-white text-right [color-scheme:dark]"
+                      />
+                      <span className="text-xs text-zinc-500">min</span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={saveCallbackConfig}
+                    disabled={callbackSaving}
+                    className="w-full rounded-lg bg-teal-600/20 border border-teal-500/30 px-3 py-2 text-sm text-teal-400 transition-colors hover:bg-teal-600/30 disabled:opacity-50"
+                  >
+                    {callbackSaving ? "Saving..." : "Save Callback Config"}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         ) : (
           <div className="space-y-3">

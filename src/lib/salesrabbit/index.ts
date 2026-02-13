@@ -1,6 +1,8 @@
 import { db } from "@/lib/db";
 import { integrationState, tasks, calendarEvents } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
+import { Queue } from "bullmq";
+import Redis from "ioredis";
 
 const SALESRABBIT_API_URL = "https://api.salesrabbit.com";
 
@@ -14,6 +16,7 @@ const STATUS_TO_CATEGORY: Record<string, string> = {
   "Follow Up": "follow_up",
   "Knocked": "door_knocking",
   "Pending": "follow_up",
+  "Callback": "follow_up",
 };
 
 const STATUS_TO_PRIORITY: Record<string, string> = {
@@ -23,13 +26,15 @@ const STATUS_TO_PRIORITY: Record<string, string> = {
   "Not Home": "low",
   "Sale Made": "low",
   "Pending": "medium",
+  "Callback": "high",
 };
 
 /**
- * Connect SalesRabbit using an API token (no OAuth — token auth)
+ * Connect SalesRabbit using an API token (no OAuth — token auth).
+ * Discovers the current user ID for owner-filtered syncs.
  */
 export async function connect(apiToken: string): Promise<boolean> {
-  // Verify the token works by making a test request
+  // Verify the token works and discover the current user
   try {
     const res = await fetch(`${SALESRABBIT_API_URL}/users?limit=1`, {
       headers: {
@@ -43,14 +48,27 @@ export async function connect(apiToken: string): Promise<boolean> {
       return false;
     }
 
-    // Store the token
+    // Try to extract the current user ID from the response
+    let currentUserId: string | undefined;
+    try {
+      const userData = await res.json();
+      const users = userData.data || userData || [];
+      if (users.length > 0) {
+        currentUserId = String(users[0].id);
+        console.log("[salesrabbit] Current user ID:", currentUserId);
+      }
+    } catch {
+      // Non-fatal — sync will work without filtering
+    }
+
+    // Store the token and user ID
     await db
       .insert(integrationState)
       .values({
         provider: "salesrabbit",
         accessToken: apiToken,
         isActive: true,
-        config: {},
+        config: { userId: currentUserId },
         lastSyncAt: null,
       })
       .onConflictDoUpdate({
@@ -58,6 +76,7 @@ export async function connect(apiToken: string): Promise<boolean> {
         set: {
           accessToken: apiToken,
           isActive: true,
+          config: { userId: currentUserId },
           updatedAt: new Date(),
         },
       });
@@ -146,7 +165,7 @@ async function srFetch(
   });
 }
 
-interface SalesRabbitLead {
+export interface SalesRabbitLead {
   id: string;
   firstName?: string;
   lastName?: string;
@@ -165,6 +184,103 @@ interface SalesRabbitLead {
   modifiedDate?: string;
   latitude?: number;
   longitude?: number;
+  customFields?: Record<string, string>;
+}
+
+export interface CallbackTriggerConfig {
+  enabled: boolean;
+  statusNameMatch: string;
+  customFieldName: string;
+  customFieldValue: string;
+  proposalPrepMinutes: number;
+}
+
+export const DEFAULT_CALLBACK_CONFIG: CallbackTriggerConfig = {
+  enabled: false,
+  statusNameMatch: "Callback",
+  customFieldName: "",
+  customFieldValue: "",
+  proposalPrepMinutes: 90,
+};
+
+/**
+ * Check if a lead matches the callback trigger criteria
+ */
+export function isCallbackLead(
+  lead: SalesRabbitLead,
+  config: CallbackTriggerConfig
+): boolean {
+  if (!config.enabled) return false;
+
+  // Check status name match
+  const statusName = lead.statusName || lead.status || "";
+  if (
+    config.statusNameMatch &&
+    statusName.toLowerCase() === config.statusNameMatch.toLowerCase()
+  ) {
+    return true;
+  }
+
+  // Check custom field match
+  if (config.customFieldName && lead.customFields) {
+    const fieldValue = lead.customFields[config.customFieldName];
+    if (fieldValue) {
+      if (!config.customFieldValue) return true; // any truthy value
+      if (fieldValue.toLowerCase() === config.customFieldValue.toLowerCase()) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Extract callback config from integration state config
+ */
+function getCallbackConfig(
+  config: Record<string, unknown>
+): CallbackTriggerConfig {
+  const ct = config.callbackTrigger as Partial<CallbackTriggerConfig> | undefined;
+  return { ...DEFAULT_CALLBACK_CONFIG, ...ct };
+}
+
+/**
+ * Get the current callback trigger config from DB
+ */
+export async function getCallbackTriggerConfig(): Promise<CallbackTriggerConfig> {
+  const [state] = await db
+    .select()
+    .from(integrationState)
+    .where(eq(integrationState.provider, "salesrabbit"));
+  const config = (state?.config as Record<string, unknown>) || {};
+  return getCallbackConfig(config);
+}
+
+/**
+ * Update callback trigger config
+ */
+export async function setCallbackTriggerConfig(
+  updates: Partial<CallbackTriggerConfig>
+): Promise<CallbackTriggerConfig> {
+  const [state] = await db
+    .select()
+    .from(integrationState)
+    .where(eq(integrationState.provider, "salesrabbit"));
+
+  const config = (state?.config as Record<string, unknown>) || {};
+  const current = getCallbackConfig(config);
+  const merged = { ...current, ...updates };
+
+  await db
+    .update(integrationState)
+    .set({
+      config: { ...config, callbackTrigger: merged },
+      updatedAt: new Date(),
+    })
+    .where(eq(integrationState.provider, "salesrabbit"));
+
+  return merged;
 }
 
 /**
@@ -185,14 +301,17 @@ export async function syncLeads(): Promise<{
       .from(integrationState)
       .where(eq(integrationState.provider, "salesrabbit"));
 
-    // Build query params — use sync cursor if available
-    let endpoint = "/leadStatusHistories?limit=100&sortDir=desc";
-    if (state?.syncCursor) {
-      endpoint += `&modifiedAfter=${state.syncCursor}`;
+    // Get the stored user ID for filtering
+    const config = (state?.config as Record<string, string>) || {};
+    const userId = config.userId;
+
+    // Fetch leads filtered by current user if available
+    let leadsEndpoint = "/leads?limit=100&sortDir=desc";
+    if (userId) {
+      leadsEndpoint += `&userId=${userId}`;
     }
 
-    // First, try fetching leads directly
-    const leadsRes = await srFetch("/leads?limit=100&sortDir=desc");
+    const leadsRes = await srFetch(leadsEndpoint);
 
     if (!leadsRes.ok) {
       console.error("[salesrabbit] Leads fetch failed:", leadsRes.status);
@@ -274,6 +393,66 @@ export async function syncLeads(): Promise<{
           },
         });
         newTasks++;
+      }
+
+      // Check for callback trigger
+      const callbackConfig = getCallbackConfig(config);
+      const existingMeta = existing?.metadata as Record<string, unknown> | null;
+      if (
+        callbackConfig.enabled &&
+        isCallbackLead(lead, callbackConfig) &&
+        !existingMeta?.callbackProcessed
+      ) {
+        // Mark as processed to prevent re-trigger
+        if (existing) {
+          await db
+            .update(tasks)
+            .set({
+              metadata: {
+                ...(existingMeta || {}),
+                callbackProcessed: true,
+              },
+              updatedAt: new Date(),
+            })
+            .where(eq(tasks.id, existing.id));
+        }
+
+        // Enqueue callback workflow with 10 min delay
+        try {
+          const redisConn = new Redis(
+            process.env.REDIS_URL || "redis://localhost:6379",
+            { maxRetriesPerRequest: null }
+          );
+          const syncQueue = new Queue("sync", { connection: redisConn });
+          await syncQueue.add(
+            "callback-workflow",
+            {
+              lead: {
+                id: lead.id,
+                firstName: lead.firstName,
+                lastName: lead.lastName,
+                phone: lead.phone,
+                email: lead.email,
+                address: lead.address,
+                city: lead.city,
+                state: lead.state,
+                zip: lead.zip,
+                notes: lead.notes,
+                customFields: lead.customFields,
+              },
+              proposalPrepMinutes: callbackConfig.proposalPrepMinutes,
+            },
+            {
+              delay: 10 * 60 * 1000, // 10 minutes
+              attempts: 4,
+              backoff: { type: "custom" },
+            }
+          );
+          await redisConn.quit();
+          console.log(`[salesrabbit] Callback workflow queued for lead ${lead.id}`);
+        } catch (err) {
+          console.error("[salesrabbit] Failed to enqueue callback workflow:", err);
+        }
       }
 
       // If lead has an appointment date, create a calendar event
@@ -390,6 +569,30 @@ export async function fullSync(): Promise<{
   );
 
   return { newTasks, newAppointments, errors };
+}
+
+/**
+ * Wipe all SalesRabbit-sourced tasks and events, reset sync cursor.
+ * Used when reconfiguring owner filtering.
+ */
+export async function wipeAndReset(): Promise<number> {
+  const deleted = await db
+    .delete(tasks)
+    .where(eq(tasks.externalSource, "salesrabbit"))
+    .returning();
+
+  const deletedEvents = await db
+    .delete(calendarEvents)
+    .where(eq(calendarEvents.source, "salesrabbit"))
+    .returning();
+
+  await db
+    .update(integrationState)
+    .set({ syncCursor: null, updatedAt: new Date() })
+    .where(eq(integrationState.provider, "salesrabbit"));
+
+  console.log(`[salesrabbit] Wiped ${deleted.length} tasks, ${deletedEvents.length} events`);
+  return deleted.length + deletedEvents.length;
 }
 
 /**

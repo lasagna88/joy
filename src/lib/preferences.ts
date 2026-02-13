@@ -13,6 +13,7 @@ export interface UserPrefs {
   min_slack_minutes: number; // daily unscheduled time
   door_knocking_start: string; // "10:00"
   door_knocking_end: string; // "17:00"
+  proposal_prep_minutes: number; // time to prepare a proposal before appointment
 }
 
 export const DEFAULT_PREFERENCES: UserPrefs = {
@@ -26,6 +27,7 @@ export const DEFAULT_PREFERENCES: UserPrefs = {
   min_slack_minutes: 30,
   door_knocking_start: "10:00",
   door_knocking_end: "17:00",
+  proposal_prep_minutes: 90,
 };
 
 export async function getPreferences(): Promise<UserPrefs> {

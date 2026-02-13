@@ -19,6 +19,7 @@ const STATUS_TO_CATEGORY: Record<string, string> = {
   "Follow Up": "follow_up",
   "Knocked": "door_knocking",
   "Pending": "follow_up",
+  "Callback": "follow_up",
 };
 
 const STATUS_TO_PRIORITY: Record<string, string> = {
@@ -28,7 +29,56 @@ const STATUS_TO_PRIORITY: Record<string, string> = {
   "Not Home": "low",
   "Sale Made": "low",
   "Pending": "medium",
+  "Callback": "high",
 };
+
+interface CallbackTriggerConfig {
+  enabled: boolean;
+  statusNameMatch: string;
+  customFieldName: string;
+  customFieldValue: string;
+  proposalPrepMinutes: number;
+}
+
+const DEFAULT_CALLBACK_CONFIG: CallbackTriggerConfig = {
+  enabled: false,
+  statusNameMatch: "Callback",
+  customFieldName: "",
+  customFieldValue: "",
+  proposalPrepMinutes: 90,
+};
+
+function getCallbackConfig(config: Record<string, unknown>): CallbackTriggerConfig {
+  const ct = config.callbackTrigger as Partial<CallbackTriggerConfig> | undefined;
+  return { ...DEFAULT_CALLBACK_CONFIG, ...ct };
+}
+
+function isCallbackLead(
+  lead: { statusName?: string; status?: string; customFields?: Record<string, string> },
+  config: CallbackTriggerConfig
+): boolean {
+  if (!config.enabled) return false;
+
+  const statusName = lead.statusName || lead.status || "";
+  if (
+    config.statusNameMatch &&
+    statusName.toLowerCase() === config.statusNameMatch.toLowerCase()
+  ) {
+    return true;
+  }
+
+  if (config.customFieldName && lead.customFields) {
+    const fieldValue = lead.customFields[config.customFieldName];
+    if (fieldValue) {
+      if (!config.customFieldValue) return true;
+      if (fieldValue.toLowerCase() === config.customFieldValue.toLowerCase()) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
 
 /**
  * SalesRabbit sync worker job — runs every 15 minutes.
@@ -60,14 +110,20 @@ export async function runSalesRabbitSync() {
     "Content-Type": "application/json",
   };
 
+  // Get stored user ID for owner filtering
+  const config = (state.config as Record<string, string>) || {};
+  const userId = config.userId;
+
   let newTasks = 0;
   let newAppointments = 0;
 
   try {
-    const res = await fetch(
-      `${SALESRABBIT_API_URL}/leads?limit=100&sortDir=desc`,
-      { headers }
-    );
+    let leadsEndpoint = `${SALESRABBIT_API_URL}/leads?limit=100&sortDir=desc`;
+    if (userId) {
+      leadsEndpoint += `&userId=${userId}`;
+    }
+
+    const res = await fetch(leadsEndpoint, { headers });
 
     if (!res.ok) {
       if (res.status === 401) {
@@ -143,6 +199,65 @@ export async function runSalesRabbitSync() {
           },
         });
         newTasks++;
+      }
+
+      // Check for callback trigger
+      const callbackConfig = getCallbackConfig(config as Record<string, unknown>);
+      const existingMeta = existing?.metadata as Record<string, unknown> | null;
+      if (
+        callbackConfig.enabled &&
+        isCallbackLead(lead, callbackConfig) &&
+        !existingMeta?.callbackProcessed
+      ) {
+        // Mark as processed
+        if (existing) {
+          await db
+            .update(schema.tasks)
+            .set({
+              metadata: { ...(existingMeta || {}), callbackProcessed: true },
+              updatedAt: new Date(),
+            })
+            .where(eq(schema.tasks.id, existing.id));
+        }
+
+        // Enqueue callback workflow with 10 min delay
+        try {
+          const callbackConn = new Redis(
+            process.env.REDIS_URL || "redis://localhost:6379",
+            { maxRetriesPerRequest: null }
+          );
+          const callbackQueue = new Queue("sync", { connection: callbackConn });
+          await callbackQueue.add(
+            "callback-workflow",
+            {
+              lead: {
+                id: lead.id,
+                firstName: lead.firstName,
+                lastName: lead.lastName,
+                phone: lead.phone,
+                email: lead.email,
+                address: lead.address,
+                city: lead.city,
+                state: lead.state,
+                zip: lead.zip,
+                notes: lead.notes,
+                customFields: lead.customFields,
+              },
+              proposalPrepMinutes: callbackConfig.proposalPrepMinutes,
+            },
+            {
+              delay: 10 * 60 * 1000,
+              attempts: 4,
+              backoff: { type: "custom" },
+            }
+          );
+          await callbackConn.quit();
+          console.log(
+            `[salesrabbit-sync] Callback workflow queued for lead ${lead.id}`
+          );
+        } catch (err) {
+          console.error("[salesrabbit-sync] Failed to enqueue callback:", err);
+        }
       }
 
       // Handle appointments

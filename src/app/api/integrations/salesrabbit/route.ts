@@ -4,15 +4,18 @@ import {
   getConnectionStatus,
   disconnect,
   fullSync,
+  getCallbackTriggerConfig,
+  setCallbackTriggerConfig,
 } from "@/lib/salesrabbit";
 
 /**
- * GET /api/integrations/salesrabbit — Get connection status
+ * GET /api/integrations/salesrabbit — Get connection status + callback config
  */
 export async function GET() {
   try {
     const status = await getConnectionStatus();
-    return NextResponse.json(status);
+    const callbackConfig = await getCallbackTriggerConfig();
+    return NextResponse.json({ ...status, callbackConfig });
   } catch (error) {
     console.error("[api/integrations/salesrabbit] Status error:", error);
     return NextResponse.json(
@@ -56,6 +59,32 @@ export async function POST(request: NextRequest) {
     console.error("[api/integrations/salesrabbit] Connect error:", error);
     return NextResponse.json(
       { error: "Failed to connect" },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * PATCH /api/integrations/salesrabbit — Update callback trigger config
+ */
+export async function PATCH(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { callbackConfig } = body;
+
+    if (!callbackConfig || typeof callbackConfig !== "object") {
+      return NextResponse.json(
+        { error: "callbackConfig object is required" },
+        { status: 400 }
+      );
+    }
+
+    const updated = await setCallbackTriggerConfig(callbackConfig);
+    return NextResponse.json({ callbackConfig: updated });
+  } catch (error) {
+    console.error("[api/integrations/salesrabbit] Config update error:", error);
+    return NextResponse.json(
+      { error: "Failed to update config" },
       { status: 500 }
     );
   }

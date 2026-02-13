@@ -8,6 +8,7 @@ import { runGoogleCalendarSync } from "./jobs/google-calendar-sync";
 import { runBiginSync } from "./jobs/bigin-sync";
 import { runSalesRabbitSync } from "./jobs/salesrabbit-sync";
 import { runGroceryCleanup } from "./jobs/grocery-cleanup";
+import { runCallbackWorkflow, getCallbackBackoffDelay } from "./jobs/callback-workflow";
 import { sendPushNotification } from "../lib/notifications";
 
 const connection = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {
@@ -75,11 +76,23 @@ const syncWorker = new Worker(
         return await runSalesRabbitSync();
       case "grocery-cleanup":
         return await runGroceryCleanup();
+      case "callback-workflow":
+        return await runCallbackWorkflow(job);
       default:
         console.log(`[sync] Unknown job: ${job.name}`);
     }
   },
-  { connection }
+  {
+    connection,
+    settings: {
+      backoffStrategy: (attemptsMade, _type, _err, job) => {
+        if (job?.name === "callback-workflow") {
+          return getCallbackBackoffDelay(attemptsMade);
+        }
+        return Math.min(Math.pow(2, attemptsMade) * 1000, 30000);
+      },
+    },
+  }
 );
 
 // Set up repeatable schedules

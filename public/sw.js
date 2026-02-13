@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-const CACHE_NAME = "joy-v3";
+const CACHE_NAME = "joy-v4";
 const OFFLINE_URL = "/";
 
 // Assets to pre-cache
