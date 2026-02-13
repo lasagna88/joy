@@ -1002,6 +1002,11 @@ export function SettingsView() {
       >
         {saving ? "Saving..." : saved ? "Saved" : "Save Preferences"}
       </button>
+
+      {/* Version */}
+      <p className="text-center text-[11px] text-zinc-600 pt-2">
+        Joy {process.env.NEXT_PUBLIC_GIT_HASH || "dev"}
+      </p>
     </div>
   );
 }
