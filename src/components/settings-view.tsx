@@ -408,6 +408,27 @@ export function SettingsView() {
     }
   }
 
+  async function wipeSalesRabbitOnly() {
+    setSrSyncing(true);
+    try {
+      const res = await fetch("/api/integrations/salesrabbit/sync?wipeOnly=true", {
+        method: "POST",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSrMessage(`Wiped ${data.wiped} items. No re-sync.`);
+        loadSrStatus();
+      } else {
+        setSrMessage("Wipe failed.");
+      }
+    } catch {
+      setSrMessage("Wipe error.");
+    } finally {
+      setSrSyncing(false);
+      setTimeout(() => setSrMessage(null), 6000);
+    }
+  }
+
   async function syncSalesRabbit(wipe = false) {
     setSrSyncing(true);
     try {
@@ -806,7 +827,7 @@ export function SettingsView() {
               </p>
             )}
 
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <button
                 onClick={() => syncSalesRabbit()}
                 disabled={srSyncing}
@@ -815,11 +836,11 @@ export function SettingsView() {
                 {srSyncing ? "Syncing..." : "Sync Now"}
               </button>
               <button
-                onClick={() => syncSalesRabbit(true)}
+                onClick={wipeSalesRabbitOnly}
                 disabled={srSyncing}
                 className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-sm text-orange-400 transition-colors hover:bg-orange-500/20 disabled:opacity-50"
               >
-                {srSyncing ? "..." : "Wipe & Re-sync"}
+                {srSyncing ? "..." : "Wipe All"}
               </button>
               <button
                 onClick={disconnectSalesRabbit}
