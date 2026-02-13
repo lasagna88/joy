@@ -141,7 +141,15 @@ export async function runSalesRabbitSync() {
     const data = await res.json();
     const leads = data.data || data || [];
 
+    // When callback workflow is enabled, only import callback leads
+    const callbackConfig = getCallbackConfig(config as Record<string, unknown>);
+
     for (const lead of leads) {
+      // Skip non-callback leads when callback workflow is enabled
+      if (callbackConfig.enabled && !isCallbackLead(lead, callbackConfig)) {
+        continue;
+      }
+
       const externalId = `sr_${lead.id}`;
       const contactName = [lead.firstName, lead.lastName]
         .filter(Boolean)
@@ -202,7 +210,6 @@ export async function runSalesRabbitSync() {
       }
 
       // Check for callback trigger
-      const callbackConfig = getCallbackConfig(config as Record<string, unknown>);
       const existingMeta = existing?.metadata as Record<string, unknown> | null;
       if (
         callbackConfig.enabled &&
