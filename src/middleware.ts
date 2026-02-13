@@ -5,7 +5,13 @@ const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || "fallback-dev-secret-change-me"
 );
 
-const PUBLIC_PATHS = ["/login", "/api/auth/login", "/manifest.json", "/sw.js"];
+const PUBLIC_PATHS = [
+  "/login",
+  "/api/auth/login",
+  "/manifest.json",
+  "/sw.js",
+  "/api/integrations/salesrabbit/leads",
+];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
